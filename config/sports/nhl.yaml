@@ -1,0 +1,62 @@
+# NHL-Specific Configuration
+# ===========================
+
+enabled: true
+
+# Roster configuration
+positions:
+  - C
+  - C
+  - W
+  - W
+  - W
+  - D
+  - D
+  - G
+  - UTIL
+
+salary_cap: 200
+roster_size: 9
+
+# Position-specific exposure limits
+max_exposure:
+  C: 0.5
+  W: 0.5
+  D: 0.4
+  G: 0.3  # Goalies are high variance
+  UTIL: 0.5
+
+# Stacking rules
+stacking_rules:
+  # Line stack (players on same line)
+  line_stack:
+    enabled: true
+    positions:
+      - C
+      - W
+    min_players: 2
+    max_players: 3
+    same_team: true
+
+  # Power play stack
+  pp_stack:
+    enabled: true
+    min_players: 2
+    same_team: true
+
+# Typical slate times
+slate_times:
+  - name: "Main Slate"
+    time: "19:00"
+    timezone: "America/New_York"
+
+  - name: "Late Slate"
+    time: "22:00"
+    timezone: "America/New_York"
+
+# Late swap settings
+late_swap:
+  enabled: true
+  projection_drop_threshold: 0.2
+  check_inactive: true
+  check_goalie_confirmation: true  # Goalie starts are crucial

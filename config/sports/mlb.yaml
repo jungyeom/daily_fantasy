@@ -1,0 +1,81 @@
+# MLB-Specific Configuration
+# ===========================
+
+enabled: true
+
+# Roster configuration
+positions:
+  - P
+  - P
+  - C
+  - 1B
+  - 2B
+  - 3B
+  - SS
+  - OF
+  - OF
+  - OF
+
+salary_cap: 200
+roster_size: 10
+
+# Position-specific exposure limits
+max_exposure:
+  P: 0.35  # Pitchers have high variance
+  C: 0.4
+  1B: 0.5
+  2B: 0.5
+  3B: 0.5
+  SS: 0.5
+  OF: 0.5
+
+# Stacking rules
+stacking_rules:
+  # Batter stack (multiple hitters from same team)
+  batter_stack:
+    enabled: true
+    positions:
+      - C
+      - 1B
+      - 2B
+      - 3B
+      - SS
+      - OF
+    min_players: 3
+    max_players: 5
+    same_team: true
+
+  # No pitcher-batter same team (opposite)
+  pitcher_vs_batters:
+    enabled: true
+    opposite_team: true
+
+# Typical slate times
+slate_times:
+  - name: "Early Slate"
+    time: "13:00"
+    timezone: "America/New_York"
+
+  - name: "Main Slate"
+    time: "19:00"
+    timezone: "America/New_York"
+
+  - name: "Night Slate"
+    time: "22:00"
+    timezone: "America/New_York"
+
+# Late swap settings
+late_swap:
+  enabled: true
+  projection_drop_threshold: 0.2
+  check_inactive: true
+  check_weather: true  # Weather impacts MLB significantly
+
+# MLB-specific settings
+mlb_specific:
+  # Consider handedness matchups
+  consider_handedness: true
+
+  # Vegas lines influence
+  use_vegas_totals: true
+  min_game_total: 7.5  # Target games with high totals

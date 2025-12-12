@@ -1,0 +1,71 @@
+# NBA-Specific Configuration
+# ===========================
+
+enabled: true
+
+# Roster configuration
+positions:
+  - PG
+  - SG
+  - G
+  - SF
+  - PF
+  - F
+  - C
+  - UTIL
+
+salary_cap: 200  # Yahoo uses $200 cap
+roster_size: 8
+
+# Position-specific exposure limits
+# NBA tends to be more chalk-friendly
+max_exposure:
+  PG: 0.6
+  SG: 0.6
+  G: 0.6
+  SF: 0.5
+  PF: 0.5
+  F: 0.5
+  C: 0.5
+  UTIL: 0.6
+
+# Stacking rules
+stacking_rules:
+  # Team stack (multiple players from high-paced games)
+  team_stack:
+    enabled: true
+    min_players: 2
+    max_players: 3
+    same_team: true
+
+  # Game stack (target high total games)
+  game_stack:
+    enabled: true
+    min_players: 3
+    max_players: 5
+
+# Typical slate times
+slate_times:
+  - name: "Main Slate"
+    time: "19:00"
+    timezone: "America/New_York"
+    days:
+      - monday
+      - tuesday
+      - wednesday
+      - thursday
+      - friday
+      - saturday
+      - sunday
+
+  - name: "Late Slate"
+    time: "22:00"
+    timezone: "America/New_York"
+
+# Late swap settings
+# NBA has rolling lock times (each game locks individually)
+late_swap:
+  enabled: true
+  projection_drop_threshold: 0.15  # 15% drop threshold
+  check_inactive: true
+  rolling_lock: true  # Games lock at tip-off

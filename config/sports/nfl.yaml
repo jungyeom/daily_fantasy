@@ -1,0 +1,87 @@
+# NFL-Specific Configuration
+# ===========================
+
+enabled: true
+
+# Roster configuration
+positions:
+  - QB
+  - RB
+  - RB
+  - WR
+  - WR
+  - WR
+  - TE
+  - FLEX
+  - DEF
+
+salary_cap: 200  # Yahoo uses $200 cap
+roster_size: 9
+
+# Position-specific exposure limits
+max_exposure:
+  QB: 0.4
+  RB: 0.5
+  WR: 0.5
+  TE: 0.4
+  DEF: 0.3
+  FLEX: 0.5
+
+# Stacking rules for GPP correlation
+stacking_rules:
+  # QB + WR/TE from same team
+  qb_stack:
+    enabled: true
+    primary: QB
+    targets:
+      - WR
+      - TE
+    min_correlated: 1
+    max_correlated: 2
+    same_team: true
+
+  # Game stack (players from opposing teams)
+  game_stack:
+    enabled: true
+    min_players: 2
+    max_players: 4
+
+  # Run back (opposing player)
+  run_back:
+    enabled: true
+    positions:
+      - WR
+      - RB
+
+# Typical slate times (for scheduling)
+slate_times:
+  - name: "Sunday Main"
+    day: "sunday"
+    time: "13:00"
+    timezone: "America/New_York"
+
+  - name: "Sunday Afternoon"
+    day: "sunday"
+    time: "16:00"
+    timezone: "America/New_York"
+
+  - name: "Sunday Night"
+    day: "sunday"
+    time: "20:20"
+    timezone: "America/New_York"
+
+  - name: "Monday Night"
+    day: "monday"
+    time: "20:15"
+    timezone: "America/New_York"
+
+  - name: "Thursday Night"
+    day: "thursday"
+    time: "20:20"
+    timezone: "America/New_York"
+
+# Late swap settings
+late_swap:
+  enabled: true
+  projection_drop_threshold: 0.2  # 20% drop triggers swap consideration
+  check_inactive: true

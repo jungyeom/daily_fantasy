@@ -1,0 +1,98 @@
+# Daily Fantasy Automation Configuration
+# ========================================
+# Copy this file to settings.yaml and configure your settings
+# Sensitive values (passwords, API keys) should be set via environment variables
+
+# Yahoo DFS Settings
+yahoo:
+  username: ""  # Set via DFS_YAHOO_USERNAME env var
+  password: ""  # Set via DFS_YAHOO_PASSWORD env var
+  headless: true  # Run browser in headless mode
+  timeout: 30  # Page load timeout in seconds
+  screenshot_on_error: true
+  user_agent: null  # Custom user agent (null = default)
+
+# Email Notification Settings (SendGrid)
+email:
+  enabled: false
+  provider: "sendgrid"  # "sendgrid" or "smtp"
+  sendgrid_api_key: ""  # Set via DFS_SENDGRID_API_KEY env var
+  from_address: "your-email@example.com"  # Must be verified in SendGrid
+  to_address: "your-email@example.com"
+
+  # SMTP fallback (if provider: "smtp")
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  smtp_username: ""  # Set via DFS_EMAIL_USERNAME env var
+  smtp_password: ""  # Set via DFS_EMAIL_PASSWORD env var
+
+  # Notification triggers
+  notify_on_submission: true
+  notify_on_late_swap: true
+  notify_on_results: true
+  notify_on_error: true
+
+# Database Settings
+database:
+  path: "data/daily_fantasy.db"
+  backup_enabled: true
+  backup_retention_days: 30
+
+# Optimizer Settings
+optimizer:
+  default_max_exposure: 0.5  # 50% max exposure per player
+  default_min_exposure: 0.0
+  randomness: 0.1  # Projection randomization for lineup diversity
+  min_salary_usage: 0.95  # Use at least 95% of salary cap
+
+# Contest Filter Settings
+contest_filter:
+  max_entry_fee: 1.0  # Only enter contests with fee <= $1
+  min_prize_pool: 0.0
+  multi_entry_only: true  # Only multi-entry GPPs
+  gpp_only: true  # Tournament contests only
+  sports: ["nfl", "nba"]  # Sports to track
+
+# Projection Sources
+projections:
+  dailyfantasyfuel:
+    enabled: true
+    weight: 1.0
+    base_url: "https://www.dailyfantasyfuel.com"
+
+  manual:
+    enabled: false
+    weight: 0.0
+    file_path: "data/projections/manual_overrides.csv"
+
+# Scheduler Settings
+scheduler:
+  enabled: true
+  dry_run: false  # If true, simulate actions without actually submitting
+
+  # Submission rules
+  submission:
+    fill_rate_threshold: 0.70  # Submit when contest is >= 70% full
+    time_before_lock_minutes: 120  # Or submit when < 2 hours to lock
+    stop_editing_minutes: 5  # Stop making edits 5 minutes before lock
+
+  # Projection refresh intervals (in minutes) based on time to lock
+  projection_refresh:
+    default_interval: 360  # > 24 hours to lock: every 6 hours
+    day_of_interval: 120  # 6-24 hours to lock: every 2 hours
+    approaching_interval: 30  # 1-6 hours to lock: every 30 min
+    imminent_interval: 10  # < 1 hour to lock: every 10 min
+
+  # Monitoring intervals (in minutes)
+  check_interval:
+    fill_rate: 10  # Check contest fill rates
+    injuries: 10  # Check for injury updates
+
+  # Retry settings
+  retry:
+    max_attempts: 3
+    delay_seconds: 30
+
+# General Settings
+log_level: "INFO"
+data_dir: "data"

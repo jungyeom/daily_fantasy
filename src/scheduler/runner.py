@@ -1,7 +1,7 @@
 """APScheduler runner for automated job execution."""
 import logging
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -266,23 +266,6 @@ class AutomationRunner:
 
         finally:
             session.close()
-
-    def run_now(self, job_name: str, **kwargs) -> None:
-        """Run a job immediately.
-
-        Args:
-            job_name: Job function name
-            **kwargs: Job arguments
-        """
-        from . import jobs
-
-        job_func = getattr(jobs, f"job_{job_name}", None)
-        if job_func is None:
-            logger.error(f"Unknown job: {job_name}")
-            return
-
-        logger.info(f"Running job {job_name} immediately")
-        job_func(self.context, **kwargs)
 
     def list_scheduled_jobs(self) -> list[dict]:
         """List all scheduled jobs.

@@ -11,9 +11,36 @@ from apscheduler.triggers.date import DateTrigger
 from ..common.config import get_config
 from ..common.database import get_database, ContestDB
 from ..common.models import Sport
+from ..common.auto_debug import handle_job_error
 from .job_functions import JobContext
 
 logger = logging.getLogger(__name__)
+
+
+def with_auto_debug(job_name: str):
+    """Decorator to wrap job methods with auto-debug error handling.
+
+    Args:
+        job_name: Human-readable job name for error context
+    """
+    def decorator(func):
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"Job {job_name} failed: {e}")
+                # Build job args dict from function signature
+                job_args = {"args": args, "kwargs": kwargs}
+                handle_job_error(
+                    error=e,
+                    job_name=job_name,
+                    job_args=job_args,
+                    additional_context={"function": func.__name__},
+                )
+                # Re-raise so APScheduler knows the job failed
+                raise
+        return wrapper
+    return decorator
 
 
 class AutomationRunner:
@@ -271,67 +298,80 @@ class AutomationRunner:
 
         logger.info(f"Scheduled {sport.value} pipeline for {day_of_week}s at 9:00 AM")
 
-    # Job wrapper methods
+    # Job wrapper methods - all wrapped with auto-debug error handling
+    @with_auto_debug("fetch_contests")
     def _run_fetch_contests(self, sport: Sport) -> None:
         """Run fetch contests job."""
         from .job_functions import job_fetch_contests
         job_fetch_contests(self.context, sport)
 
+    @with_auto_debug("fetch_player_pool")
     def _run_fetch_player_pool(self, contest_id: str, sport: Sport) -> None:
         """Run fetch player pool job."""
         from .job_functions import job_fetch_player_pool
         job_fetch_player_pool(self.context, contest_id, sport)
 
+    @with_auto_debug("fetch_projections")
     def _run_fetch_projections(self, sport: Sport, contest_id: str) -> None:
         """Run fetch projections job."""
         from .job_functions import job_fetch_projections
         job_fetch_projections(self.context, sport, contest_id)
 
+    @with_auto_debug("generate_lineups")
     def _run_generate_lineups(self, sport: Sport, contest_id: str) -> None:
         """Run generate lineups job."""
         from .job_functions import job_generate_lineups
         job_generate_lineups(self.context, sport, contest_id)
 
+    @with_auto_debug("submit_lineups")
     def _run_submit_lineups(self, contest_id: str, sport_name: str, contest_name: str) -> None:
         """Run submit lineups job."""
         from .job_functions import job_submit_lineups
         job_submit_lineups(self.context, contest_id, sport_name, contest_name)
 
+    @with_auto_debug("edit_lineups")
     def _run_edit_lineups(self, contest_id: str, sport: Sport) -> None:
         """Run edit lineups job to replace injured players."""
         from .job_functions import job_edit_lineups
         job_edit_lineups(self.context, contest_id, sport)
 
+    @with_auto_debug("check_fill_rates")
     def _run_check_fill_rates(self, sport: Sport) -> None:
         """Run fill rate check job."""
         from .job_functions import job_check_fill_rates
         job_check_fill_rates(self.context, sport)
 
+    @with_auto_debug("check_injuries")
     def _run_check_injuries(self, sport: Sport) -> None:
         """Run injury check job."""
         from .job_functions import job_check_injuries
         job_check_injuries(self.context, sport)
 
+    @with_auto_debug("refresh_projections")
     def _run_refresh_projections(self, sport: Sport) -> None:
         """Run dynamic projection refresh job."""
         from .job_functions import job_refresh_projections_dynamic
         job_refresh_projections_dynamic(self.context, sport)
 
+    @with_auto_debug("late_swap_check")
     def _run_late_swap_check(self, sport: Sport) -> None:
         """Run late swap check job."""
         from .job_functions import job_check_late_swaps
         job_check_late_swaps(self.context, sport)
 
+    @with_auto_debug("fetch_results")
     def _run_fetch_results(self) -> None:
         """Run fetch results job."""
         from .job_functions import job_fetch_results
         job_fetch_results(self.context)
 
+    @with_auto_debug("daily_report")
     def _run_daily_report(self) -> None:
         """Run daily report job."""
         from .job_functions import job_send_daily_report
         job_send_daily_report(self.context)
 
+    @with_auto_debug("fetch_and_schedule")
     def _run_fetch_and_schedule(self, sport: Sport) -> None:
         """Fetch contests and schedule pipelines for each."""
         from .job_functions import job_fetch_contests

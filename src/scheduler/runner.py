@@ -178,6 +178,19 @@ class AutomationRunner:
             )
             logger.info(f"Scheduled daily pipeline for {sport.value} at 8:00 AM")
 
+        # Fill rate monitoring - check every 10 minutes for all sports
+        # This will trigger submission when fill rate >= 70% or time threshold is met
+        fill_rate_interval = getattr(self.config.scheduler, 'fill_rate_check_interval', 10)
+        for sport in [Sport.NFL, Sport.NBA, Sport.MLB, Sport.NHL]:
+            self.scheduler.add_job(
+                self._run_check_fill_rates,
+                trigger=IntervalTrigger(minutes=fill_rate_interval),
+                args=[sport],
+                id=f"fill_rate_check_{sport.value}",
+                replace_existing=True,
+            )
+        logger.info(f"Scheduled fill rate checks every {fill_rate_interval} minutes")
+
         # Daily results fetch (evening)
         self.scheduler.add_job(
             self._run_fetch_results,
@@ -258,6 +271,11 @@ class AutomationRunner:
         """Run edit lineups job to replace injured players."""
         from .jobs import job_edit_lineups
         job_edit_lineups(self.context, contest_id, sport)
+
+    def _run_check_fill_rates(self, sport: Sport) -> None:
+        """Run fill rate check job."""
+        from .jobs import job_check_fill_rates
+        job_check_fill_rates(self.context, sport)
 
     def _run_late_swap_check(self, sport: Sport) -> None:
         """Run late swap check job."""

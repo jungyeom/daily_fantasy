@@ -96,6 +96,9 @@ class SchedulerConfig(BaseModel):
     stop_editing_minutes: int = 5  # Stop making edits X minutes before lock
     late_swap_check_interval_minutes: int = 15
     results_check_delay_hours: float = 4.0  # Hours after slate ends
+    # Fill rate monitoring
+    fill_rate_threshold: float = 0.70  # Submit when contest is >= 70% full
+    fill_rate_check_interval: int = 10  # Check fill rates every X minutes
 
 
 class Config(BaseModel):

@@ -526,3 +526,103 @@ def job_send_daily_report(context: JobContext) -> bool:
     except Exception as e:
         logger.error(f"Job send_daily_report failed: {e}")
         return False
+
+
+def job_check_fill_rates(context: JobContext, sport: Sport) -> int:
+    """Check contest fill rates and submit lineups when thresholds are met.
+
+    This job monitors contest fill rates and triggers submission when:
+    1. Fill rate >= threshold (e.g., 70%)
+    2. Time to lock < threshold (e.g., 2 hours)
+
+    Args:
+        context: Job context
+        sport: Sport to check
+
+    Returns:
+        Number of contests submitted
+    """
+    logger.info(f"Running job: check_fill_rates for {sport.value}")
+
+    try:
+        from ..scheduler.fill_monitor import FillMonitor, FillMonitorConfig
+        from ..yahoo.contests import ContestFetcher
+
+        # Get config from settings
+        config = context.config
+        scheduler_cfg = config.scheduler
+
+        # Create fill monitor with config values
+        monitor_config = FillMonitorConfig(
+            fill_rate_threshold=getattr(scheduler_cfg, 'fill_rate_threshold', 0.70),
+            time_before_lock_minutes=int(scheduler_cfg.submit_lineups_hours_before * 60),
+            stop_editing_minutes=scheduler_cfg.stop_editing_minutes,
+        )
+        monitor = FillMonitor(monitor_config)
+
+        # Fetch fresh contest data from Yahoo
+        driver = context.get_driver()
+        fetcher = ContestFetcher()
+        contests = fetcher.fetch_contests(driver, sport)
+
+        if not contests:
+            logger.info(f"No {sport.value} contests found")
+            return 0
+
+        # Check which contests are ready to submit
+        to_submit = monitor.get_contests_to_submit(
+            [c.__dict__ if hasattr(c, '__dict__') else c for c in contests],
+            sport=sport.value,
+        )
+
+        submitted_count = 0
+
+        for contest, entry_record, status in to_submit:
+            contest_id = status.contest_id
+            logger.info(f"Submitting contest {contest_id}: {status.reason}")
+
+            try:
+                # Generate lineups and submit
+                from .jobs import job_generate_lineups, job_submit_lineups
+
+                # Generate fresh lineups
+                job_generate_lineups(context, sport, contest_id)
+
+                # Submit
+                contest_name = contest.get("name", f"{sport.value} Contest")
+                successful, failed = job_submit_lineups(
+                    context, contest_id, sport.value, contest_name
+                )
+
+                if successful > 0:
+                    # Mark as submitted in fill monitor
+                    monitor.mark_submitted(contest_id, successful, status.fill_rate)
+                    submitted_count += 1
+
+                    context.notifier.notify_success(
+                        title=f"{sport.value} Contest Submitted",
+                        message=f"Submitted {successful} lineups to {contest_name} (fill rate: {status.fill_rate:.1%})",
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to submit contest {contest_id}: {e}")
+                context.notifier.notify_error(
+                    error_type="SubmissionError",
+                    error_message=str(e),
+                    context={"contest_id": contest_id, "sport": sport.value},
+                )
+
+        # Update any contests that have locked
+        monitor.update_locked_contests()
+
+        logger.info(f"Fill rate check complete: {submitted_count} contests submitted")
+        return submitted_count
+
+    except Exception as e:
+        logger.error(f"Job check_fill_rates failed: {e}")
+        context.notifier.notify_error(
+            error_type="JobError",
+            error_message=str(e),
+            context={"job": "check_fill_rates", "sport": sport.value},
+        )
+        return 0

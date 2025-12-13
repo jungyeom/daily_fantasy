@@ -160,17 +160,23 @@ def parse_api_contest(raw: dict) -> dict:
     Returns:
         Normalized contest dictionary with parsed fields
     """
-    # Extract entry fee
+    # Extract entry fee - try direct field first, then nested object
     entry_fee = Decimal("0")
-    paid_entry = raw.get("paidEntryFee", {})
-    if paid_entry:
-        entry_fee = Decimal(str(paid_entry.get("value", 0)))
+    if "entryFee" in raw:
+        entry_fee = Decimal(str(raw.get("entryFee", 0)))
+    else:
+        paid_entry = raw.get("paidEntryFee", {})
+        if paid_entry:
+            entry_fee = Decimal(str(paid_entry.get("value", 0)))
 
-    # Extract prize pool
+    # Extract prize pool - try direct field first, then nested object
     prize_pool = None
-    paid_prize = raw.get("paidTotalPrize", {})
-    if paid_prize:
-        prize_pool = Decimal(str(paid_prize.get("value", 0)))
+    if "totalPrize" in raw:
+        prize_pool = Decimal(str(raw.get("totalPrize", 0)))
+    else:
+        paid_prize = raw.get("paidTotalPrize", {})
+        if paid_prize:
+            prize_pool = Decimal(str(paid_prize.get("value", 0)))
 
     # Parse start time (API returns milliseconds)
     start_time_ms = raw.get("startTime", 0)
@@ -288,7 +294,8 @@ def parse_api_player(raw: dict, contest_id: str) -> dict:
         # Injury/status info
         # 'status' field contains: INJ (injured), O (out), GTD (game time decision), N/A (available)
         "status": raw.get("status", ""),
-        "injury_status": raw.get("injuryStatus"),
+        # Use 'status' as the primary injury status since 'injuryStatus' is often None
+        "injury_status": raw.get("status") or raw.get("injuryStatus"),
         "injury_note": raw.get("injuryNote"),
         # Raw data for debugging
         "_raw": raw,

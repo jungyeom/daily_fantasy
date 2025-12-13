@@ -72,6 +72,17 @@ class LineupBuilder:
         valid_players = [p for p in players if p.projected_points and p.projected_points > 0]
         logger.info(f"Using {len(valid_players)} players with valid projections")
 
+        # Filter out injured players (INJ, O are excluded; GTD players are kept)
+        excluded_statuses = {"INJ", "O"}
+        healthy_players = [
+            p for p in valid_players
+            if not p.injury_status or p.injury_status not in excluded_statuses
+        ]
+        injured_count = len(valid_players) - len(healthy_players)
+        if injured_count > 0:
+            logger.info(f"Excluded {injured_count} injured/out players (keeping GTD)")
+        valid_players = healthy_players
+
         # Single-game requires fewer players (5 per lineup vs 8-10 for classic)
         min_players = 5 if self.single_game else 8
         if len(valid_players) < min_players:

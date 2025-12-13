@@ -75,6 +75,8 @@ class PlayerPoolFetcher:
                         game_time=parsed["game_time"],
                         opponent=parsed["opponent"],
                         projected_points=parsed["projected_points"],  # Yahoo's projections!
+                        injury_status=parsed.get("injury_status"),
+                        injury_note=parsed.get("injury_note"),
                     )
                     # Store extended data as attributes
                     player._api_data = parsed
@@ -233,12 +235,15 @@ class PlayerPoolFetcher:
                     db_player = PlayerPoolDB(
                         contest_id=contest_id,
                         yahoo_player_id=player.yahoo_player_id,
+                        player_game_code=player.player_game_code,  # Required for CSV upload
                         name=player.name,
                         team=player.team,
                         position=player.position,
                         salary=player.salary,
                         game_time=player.game_time,
                         opponent=player.opponent,
+                        injury_status=player.injury_status,
+                        injury_note=player.injury_note,
                     )
                     session.add(db_player)
 
@@ -278,6 +283,8 @@ class PlayerPoolFetcher:
                     salary=p.salary,
                     game_time=p.game_time,
                     opponent=p.opponent,
+                    injury_status=p.injury_status,
+                    injury_note=p.injury_note,
                 )
                 for p in db_players
             ]

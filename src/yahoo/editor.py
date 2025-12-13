@@ -507,83 +507,78 @@ class LineupEditor:
             # Wait for download link to appear (it's dynamically rendered after slate selection)
             time.sleep(3)
 
+            # Clear old CSVs from download dir
+            for old_csv in self.download_dir.glob("*.csv"):
+                old_csv.unlink()
+
             # Try multiple times with increasing waits
             for attempt in range(3):
                 logger.info(f"Looking for download link (attempt {attempt + 1}/3)...")
 
-                # Clear old CSVs from download dir
-                for old_csv in self.download_dir.glob("*.csv"):
-                    old_csv.unlink()
+                # PRIORITY 1: Look for the specific ".csv template" link text
+                # Yahoo's edit page has "Download a .csv template" link
+                specific_selectors = [
+                    "//a[contains(text(), '.csv template')]",
+                    "//a[contains(text(), 'csv template')]",
+                    "//a[contains(., '.csv template')]",
+                    "//a[contains(., 'Download a .csv')]",
+                ]
 
-                # First: look for links with "click here" or "download" text
-                # Yahoo often uses "Click here to download" pattern
+                for selector in specific_selectors:
+                    try:
+                        from selenium.webdriver.common.by import By
+                        download_link = driver.find_element(By.XPATH, selector)
+                        if download_link and download_link.is_displayed():
+                            href = download_link.get_attribute("href") or ""
+                            logger.info(f"Found template link: '{download_link.text}' -> {href[:60]}")
+                            driver.execute_script("arguments[0].click();", download_link)
+                            time.sleep(2)
+
+                            result = self._wait_for_download(timeout=30)
+                            if result:
+                                return result
+                    except:
+                        continue
+
+                # PRIORITY 2: Look for links with export/template in href
                 links = driver.find_elements(By.TAG_NAME, "a")
                 for link in links:
                     try:
                         text = link.text.lower().strip()
                         href = link.get_attribute("href") or ""
 
-                        # Look for download-related patterns
-                        is_download_link = (
-                            "download" in text or
-                            "click here" in text or
-                            "template" in text or
-                            ".csv" in href.lower() or
-                            "csv" in href.lower()
+                        # Look for template download links by href pattern
+                        is_template_link = (
+                            "template" in href.lower() or
+                            "export" in href.lower() or
+                            ("csv" in text and "template" in text)
                         )
 
-                        # Skip navigation/header links
-                        is_nav = "skip" in text or len(text) > 100
+                        # Skip navigation links
+                        is_nav = "skip" in text or "app" in text.lower() or len(text) > 100
 
-                        if is_download_link and not is_nav and link.is_displayed():
-                            logger.info(f"Found download link: '{text}' -> {href[:50]}")
+                        if is_template_link and not is_nav and link.is_displayed():
+                            logger.info(f"Found download link: '{text}' -> {href[:60]}")
                             driver.execute_script("arguments[0].click();", link)
-                            time.sleep(3)
+                            time.sleep(2)
 
-                            # Check if download started
-                            result = self._wait_for_download(timeout=15)
+                            result = self._wait_for_download(timeout=30)
                             if result:
                                 return result
                     except Exception as e:
                         logger.debug(f"Error checking link: {e}")
                         continue
 
-                # Second: look for spans that might be clickable download links
-                # Sometimes the download is in a span inside an anchor
-                spans = driver.find_elements(By.TAG_NAME, "span")
-                for span in spans:
+                # PRIORITY 3: Iterate all links looking for "csv" and "template" text
+                for link in links:
                     try:
-                        text = span.text.lower().strip()
-                        if ("download" in text or "click here" in text) and span.is_displayed():
-                            parent = span.find_element(By.XPATH, "..")
-                            if parent.tag_name == "a":
-                                logger.info(f"Found download via span: '{text}'")
-                                driver.execute_script("arguments[0].click();", parent)
-                                time.sleep(3)
+                        text = link.text.lower() if link.text else ""
+                        if "csv" in text and "template" in text and link.is_displayed():
+                            logger.info(f"Found link by iteration: {text[:50]}")
+                            driver.execute_script("arguments[0].click();", link)
+                            time.sleep(2)
 
-                                result = self._wait_for_download(timeout=15)
-                                if result:
-                                    return result
-                    except:
-                        continue
-
-                # Third: try CSS selectors
-                download_selectors = [
-                    "a[href*='.csv']",
-                    "a[href*='download']",
-                    "[data-tst*='download']",
-                    ".download-link",
-                ]
-
-                for selector in download_selectors:
-                    try:
-                        elem = driver.find_element(By.CSS_SELECTOR, selector)
-                        if elem.is_displayed():
-                            logger.info(f"Found download via selector: {selector}")
-                            driver.execute_script("arguments[0].click();", elem)
-                            time.sleep(3)
-
-                            result = self._wait_for_download(timeout=15)
+                            result = self._wait_for_download(timeout=30)
                             if result:
                                 return result
                     except:
@@ -931,12 +926,38 @@ class LineupEditor:
 
     def _find_submit_button(self, driver: WebDriver):
         """Find the submit/upload button on the edit page."""
-        # Try by text
+        # PRIORITY 1: Try XPATH selectors for upload-related buttons
+        upload_selectors = [
+            "//button[contains(text(), 'Upload and edit')]",
+            "//button[contains(text(), 'Upload')]",
+            "//button[contains(., 'Upload')]",
+            "//button[contains(., 'edit entries')]",
+        ]
+        for selector in upload_selectors:
+            try:
+                btn = driver.find_element(By.XPATH, selector)
+                if btn and btn.is_displayed() and btn.is_enabled():
+                    logger.info(f"Found upload button with: {selector}")
+                    return btn
+            except:
+                continue
+
+        # PRIORITY 2: Try by button text iteration
         buttons = driver.find_elements(By.TAG_NAME, "button")
         for btn in buttons:
             try:
                 text = btn.text.strip().lower()
-                if text in ("upload", "submit", "save", "edit", "update") and btn.is_displayed():
+                if "upload" in text and btn.is_displayed() and btn.is_enabled():
+                    logger.info(f"Found button by text: {btn.text}")
+                    return btn
+            except:
+                continue
+
+        # PRIORITY 3: Other submit-like buttons
+        for btn in buttons:
+            try:
+                text = btn.text.strip().lower()
+                if text in ("submit", "save", "edit", "update") and btn.is_displayed():
                     return btn
             except:
                 continue
@@ -967,19 +988,36 @@ class LineupEditor:
         try:
             page_text = driver.find_element(By.TAG_NAME, "body").text.lower()
 
-            # Check for success indicators
-            success_indicators = ["success", "updated", "saved", "edited", "complete", "entries updated"]
+            # Check for success indicators - Yahoo shows "X Contest entries edited successfully!"
+            success_indicators = [
+                "edited successfully",
+                "entries edited",
+                "success",
+                "updated successfully",
+                "saved",
+                "complete",
+            ]
             for indicator in success_indicators:
                 if indicator in page_text:
                     logger.info(f"Success indicator found: '{indicator}'")
                     return True
 
-            # Check for error indicators
-            error_indicators = ["error", "failed", "invalid", "could not", "unable"]
+            # Check for specific error indicators
+            error_indicators = [
+                "error",
+                "failed",
+                "invalid entry id",
+                "player not in contest",
+                "could not",
+                "unable to",
+            ]
             for indicator in error_indicators:
                 if indicator in page_text:
                     logger.warning(f"Error indicator found: '{indicator}'")
-                    # Don't immediately fail - could be unrelated text
+                    # Check if it's a real error or just page text
+                    if "your csv file" in page_text and indicator in page_text:
+                        logger.error(f"CSV validation error detected")
+                        return False
 
             logger.info("No clear result indicator - assuming success")
             return True

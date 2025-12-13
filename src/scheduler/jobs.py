@@ -392,6 +392,114 @@ def job_fetch_results(context: JobContext, sport: Optional[Sport] = None) -> int
         return 0
 
 
+def job_edit_lineups(
+    context: JobContext,
+    contest_id: str,
+    sport: Sport,
+) -> dict:
+    """Edit existing lineups to replace injured players.
+
+    This job should be run after initial submission to:
+    1. Re-fetch player pool with updated injury status
+    2. Generate new lineups excluding injured players
+    3. Edit the existing entries on Yahoo
+
+    Args:
+        context: Job context
+        contest_id: Contest ID
+        sport: Sport
+
+    Returns:
+        Dict with success status and edit count
+    """
+    logger.info(f"Running job: edit_lineups for contest {contest_id}")
+
+    try:
+        from ..yahoo.editor import LineupEditor
+        from ..yahoo.players import PlayerPoolFetcher
+        from ..optimizer.builder import LineupBuilder
+        from ..projections.aggregator import ProjectionAggregator
+
+        driver = context.get_driver()
+
+        # Step 1: Re-fetch player pool to get latest injury status
+        fetcher = PlayerPoolFetcher()
+        players = fetcher.fetch_player_pool(contest_id, sport, save_to_db=True)
+
+        if not players:
+            logger.warning(f"No players found for contest {contest_id}")
+            return {"success": False, "message": "No players found", "edited_count": 0}
+
+        # Count injured players
+        injured_count = sum(1 for p in players if p.injury_status in {"INJ", "O"})
+        logger.info(f"Found {injured_count} injured/out players in pool of {len(players)}")
+
+        if injured_count == 0:
+            logger.info("No injured players - no edits needed")
+            return {"success": True, "message": "No injured players", "edited_count": 0}
+
+        # Step 2: Get projections for healthy players
+        aggregator = ProjectionAggregator()
+        players_with_proj = aggregator.get_projections_for_contest(sport, players)
+
+        # Step 3: Generate new lineups (LineupBuilder already filters injured)
+        builder = LineupBuilder(sport)
+        # Get max entries for this contest
+        session = context.db.get_session()
+        try:
+            contest = session.query(ContestDB).filter_by(id=contest_id).first()
+            max_entries = contest.max_entries if contest else 150
+        finally:
+            session.close()
+
+        lineups = builder.build_lineups(
+            players=players_with_proj,
+            num_lineups=max_entries,
+            contest_id=contest_id,
+            save_to_db=False,  # Don't save - we're editing existing entries
+        )
+
+        if not lineups:
+            logger.error("Failed to generate replacement lineups")
+            return {"success": False, "message": "Failed to generate lineups", "edited_count": 0}
+
+        logger.info(f"Generated {len(lineups)} healthy lineups for editing")
+
+        # Step 4: Edit existing entries with new lineups
+        editor = LineupEditor()
+        result = editor.edit_lineups_for_contest(
+            driver=driver,
+            contest_id=contest_id,
+            lineups=lineups,
+            sport=sport.value.lower(),
+        )
+
+        if result["success"]:
+            logger.info(f"Successfully edited {result['edited_count']} lineups")
+            context.notifier.notify_success(
+                title=f"{sport.value} Lineup Edits Complete",
+                message=f"Edited {result['edited_count']} lineups for contest {contest_id}",
+            )
+        else:
+            logger.error(f"Edit failed: {result['message']}")
+            context.notifier.notify_error(
+                error_type="EditError",
+                error_message=result["message"],
+                context={"contest_id": contest_id, "sport": sport.value},
+            )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Job edit_lineups failed: {e}")
+        context.notifier.notify_error(
+            error_type="JobError",
+            error_message=str(e),
+            context={"job": "edit_lineups", "contest_id": contest_id},
+        )
+        return {"success": False, "message": str(e), "edited_count": 0}
+
+
 def job_send_daily_report(context: JobContext) -> bool:
     """Send daily performance report via email.
 

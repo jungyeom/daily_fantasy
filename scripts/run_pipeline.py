@@ -42,9 +42,9 @@ def main():
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["full", "fetch", "generate", "submit", "monitor"],
+        choices=["full", "fetch", "generate", "submit", "edit", "monitor"],
         default="full",
-        help="Pipeline mode: full (all steps), or individual steps",
+        help="Pipeline mode: full (all steps), edit (replace injured players), or individual steps",
     )
 
     parser.add_argument(
@@ -111,6 +111,7 @@ def run_single_step(mode: str, sport: Sport, contest_id: str, dry_run: bool = Fa
         job_fetch_projections,
         job_generate_lineups,
         job_submit_lineups,
+        job_edit_lineups,
         job_check_late_swaps,
     )
 
@@ -129,6 +130,13 @@ def run_single_step(mode: str, sport: Sport, contest_id: str, dry_run: bool = Fa
                 logger.info("Dry run - skipping submission")
             else:
                 job_submit_lineups(context, contest_id, sport.value, f"{sport.value} Contest")
+
+        elif mode == "edit":
+            if dry_run:
+                logger.info("Dry run - skipping edit")
+            else:
+                result = job_edit_lineups(context, contest_id, sport)
+                logger.info(f"Edit result: {result}")
 
         elif mode == "monitor":
             job_check_late_swaps(context, sport)

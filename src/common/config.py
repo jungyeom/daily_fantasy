@@ -92,6 +92,8 @@ class SchedulerConfig(BaseModel):
     fetch_contests_hours_before: float = 4.0  # Hours before slate lock
     generate_lineups_hours_before: float = 3.0
     submit_lineups_hours_before: float = 2.0
+    edit_lineups_minutes_before: int = 30  # Minutes before lock to edit/replace injured players
+    stop_editing_minutes: int = 5  # Stop making edits X minutes before lock
     late_swap_check_interval_minutes: int = 15
     results_check_delay_hours: float = 4.0  # Hours after slate ends
 

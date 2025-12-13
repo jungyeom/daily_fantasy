@@ -61,6 +61,7 @@ class AutomationRunner:
         - Fetch projections (3 hours before)
         - Generate lineups (2.5 hours before)
         - Submit lineups (2 hours before)
+        - Edit lineups (30 min before) - replace injured players
         - Late swap checks (every 15 min until lock)
 
         Args:
@@ -77,6 +78,13 @@ class AutomationRunner:
         fetch_proj_time = slate_start - timedelta(hours=scheduler_config.generate_lineups_hours_before)
         generate_time = slate_start - timedelta(hours=scheduler_config.generate_lineups_hours_before - 0.5)
         submit_time = slate_start - timedelta(hours=scheduler_config.submit_lineups_hours_before)
+
+        # Edit lineups 30 min before lock to replace any injured players
+        edit_minutes_before = getattr(scheduler_config, 'edit_lineups_minutes_before', 30)
+        edit_time = slate_start - timedelta(minutes=edit_minutes_before)
+
+        # Stop editing 5 min before lock (from config or default)
+        stop_editing_minutes = getattr(scheduler_config, 'stop_editing_minutes', 5)
 
         job_prefix = f"{sport.value}_{contest_id}"
 
@@ -124,6 +132,17 @@ class AutomationRunner:
             )
             logger.info(f"Scheduled submit_lineups at {submit_time}")
 
+        # Schedule edit lineups (replace injured players) 30 min before lock
+        if edit_time > now and edit_time > submit_time:
+            self.scheduler.add_job(
+                self._run_edit_lineups,
+                trigger=DateTrigger(run_date=edit_time),
+                args=[contest_id, sport],
+                id=f"{job_prefix}_edit",
+                replace_existing=True,
+            )
+            logger.info(f"Scheduled edit_lineups at {edit_time}")
+
         # Schedule late swap checks
         if submit_time < slate_start:
             self.scheduler.add_job(
@@ -131,7 +150,7 @@ class AutomationRunner:
                 trigger=IntervalTrigger(
                     minutes=scheduler_config.late_swap_check_interval_minutes,
                     start_date=submit_time + timedelta(minutes=30),
-                    end_date=slate_start - timedelta(minutes=5),
+                    end_date=slate_start - timedelta(minutes=stop_editing_minutes),
                 ),
                 args=[sport],
                 id=f"{job_prefix}_late_swap",
@@ -223,6 +242,11 @@ class AutomationRunner:
         from .jobs import job_submit_lineups
         job_submit_lineups(self.context, contest_id, sport_name, contest_name)
 
+    def _run_edit_lineups(self, contest_id: str, sport: Sport) -> None:
+        """Run edit lineups job to replace injured players."""
+        from .jobs import job_edit_lineups
+        job_edit_lineups(self.context, contest_id, sport)
+
     def _run_late_swap_check(self, sport: Sport) -> None:
         """Run late swap check job."""
         from .jobs import job_check_late_swaps
@@ -289,19 +313,21 @@ def get_runner() -> AutomationRunner:
     return AutomationRunner()
 
 
-def run_full_pipeline(sport: Sport, contest_id: str, contest_name: str) -> None:
+def run_full_pipeline(sport: Sport, contest_id: str, contest_name: str, skip_edit: bool = False) -> None:
     """Run full pipeline immediately for a contest.
 
     Args:
         sport: Sport
         contest_id: Contest ID
         contest_name: Contest name
+        skip_edit: If True, skip the edit lineups step
     """
     from .jobs import (
         job_fetch_player_pool,
         job_fetch_projections,
         job_generate_lineups,
         job_submit_lineups,
+        job_edit_lineups,
         JobContext,
     )
 
@@ -315,6 +341,11 @@ def run_full_pipeline(sport: Sport, contest_id: str, contest_name: str) -> None:
         job_fetch_projections(context, sport, contest_id)
         job_generate_lineups(context, sport, contest_id)
         job_submit_lineups(context, contest_id, sport.value, contest_name)
+
+        # Edit lineups to replace any injured players (runs after submission)
+        if not skip_edit:
+            logger.info("Running edit lineups to replace injured players...")
+            job_edit_lineups(context, contest_id, sport)
 
         logger.info("Pipeline complete")
 

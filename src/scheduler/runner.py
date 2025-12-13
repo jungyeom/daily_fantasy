@@ -191,6 +191,19 @@ class AutomationRunner:
             )
         logger.info(f"Scheduled fill rate checks every {fill_rate_interval} minutes")
 
+        # Injury monitoring - check every 10 minutes for all sports
+        # This will swap OUT/INJ players and re-upload edited lineups
+        injury_check_interval = getattr(self.config.scheduler, 'injury_check_interval', 10)
+        for sport in [Sport.NFL, Sport.NBA, Sport.MLB, Sport.NHL]:
+            self.scheduler.add_job(
+                self._run_check_injuries,
+                trigger=IntervalTrigger(minutes=injury_check_interval),
+                args=[sport],
+                id=f"injury_check_{sport.value}",
+                replace_existing=True,
+            )
+        logger.info(f"Scheduled injury checks every {injury_check_interval} minutes")
+
         # Daily results fetch (evening)
         self.scheduler.add_job(
             self._run_fetch_results,
@@ -276,6 +289,11 @@ class AutomationRunner:
         """Run fill rate check job."""
         from .jobs import job_check_fill_rates
         job_check_fill_rates(self.context, sport)
+
+    def _run_check_injuries(self, sport: Sport) -> None:
+        """Run injury check job."""
+        from .jobs import job_check_injuries
+        job_check_injuries(self.context, sport)
 
     def _run_late_swap_check(self, sport: Sport) -> None:
         """Run late swap check job."""

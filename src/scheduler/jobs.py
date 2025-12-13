@@ -528,6 +528,68 @@ def job_send_daily_report(context: JobContext) -> bool:
         return False
 
 
+def job_check_injuries(context: JobContext, sport: Sport) -> int:
+    """Check for injured players and trigger lineup edits.
+
+    This job monitors player injury statuses and:
+    1. Refreshes player pool injury data from Yahoo API
+    2. Finds OUT/INJ players in submitted lineups
+    3. Swaps them with best available replacements
+    4. Re-uploads edited lineups to Yahoo
+
+    Args:
+        context: Job context
+        sport: Sport to check
+
+    Returns:
+        Number of swaps performed
+    """
+    logger.info(f"Running job: check_injuries for {sport.value}")
+
+    try:
+        from ..scheduler.jobs.injury_monitor import InjuryMonitorJob
+        from ..scheduler.fill_monitor import FillMonitorConfig
+
+        # Get config from settings
+        scheduler_cfg = context.config.scheduler
+
+        # Create fill config for edit window checking
+        fill_config = FillMonitorConfig(
+            fill_rate_threshold=scheduler_cfg.fill_rate_threshold,
+            time_before_lock_minutes=int(scheduler_cfg.submit_lineups_hours_before * 60),
+            stop_editing_minutes=scheduler_cfg.stop_editing_minutes,
+        )
+
+        # Run injury monitor job
+        job = InjuryMonitorJob(dry_run=False, fill_config=fill_config)
+        result = job.execute(sport=sport.value.lower())
+
+        total_swaps = result.get("total_swaps", 0)
+        contests_checked = result.get("contests_checked", 0)
+
+        logger.info(
+            f"Injury check complete: {contests_checked} contests checked, "
+            f"{total_swaps} swaps performed"
+        )
+
+        if total_swaps > 0:
+            context.notifier.notify_success(
+                title=f"{sport.value} Injury Swaps Complete",
+                message=f"Made {total_swaps} player swaps across {contests_checked} contests",
+            )
+
+        return total_swaps
+
+    except Exception as e:
+        logger.error(f"Job check_injuries failed: {e}")
+        context.notifier.notify_error(
+            error_type="JobError",
+            error_message=str(e),
+            context={"job": "check_injuries", "sport": sport.value},
+        )
+        return 0
+
+
 def job_check_fill_rates(context: JobContext, sport: Sport) -> int:
     """Check contest fill rates and submit lineups when thresholds are met.
 

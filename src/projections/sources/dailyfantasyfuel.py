@@ -172,22 +172,32 @@ class DailyFantasyFuelSource(ProjectionSource):
     def _parse_player_row(self, row, sport: Sport) -> Optional[Projection]:
         """Parse a single player row.
 
-        DFF FanDuel table cell structure (as of Dec 2024):
-        - Cell 0: Player card (combined info - skip this)
-        - Cell 1: Position (POS)
-        - Cell 2: Name (NAME) - full name
-        - Cell 3: Salary (SALARY) - format: "$8.3k"
-        - Cell 4: Start (expected starter status)
-        - Cell 5: Team (TEAM)
-        - Cell 6: Opponent (OPP)
-        - Cell 7: DvP rank (Defense vs Position) - NOT the projection!
-        - Cell 8: FD FP PROJECTED <- FanDuel fantasy points projection
-        - Cell 9: Value (VALUEPROJECTED)
-        - Cell 10: L5 Avg
-        - Cell 11: L10 Avg
-        - Cell 12: Season Avg
-        - Cell 13: O/U (Over/Under)
-        - Cell 14: Team Points
+        DFF FanDuel table cell structure varies by sport (as of Dec 2024):
+
+        NFL structure (no START column):
+        - Cell 0: Player card (combined info - skip)
+        - Cell 1: POS
+        - Cell 2: NAME
+        - Cell 3: SALARY
+        - Cell 4: TEAM
+        - Cell 5: OPP
+        - Cell 6: DvP
+        - Cell 7: FD FP PROJECTED <- projection
+        - Cell 8: VALUE
+        - Cell 9+: Historical averages
+
+        NBA/MLB/NHL structure (has START column):
+        - Cell 0: Player card (combined info - skip)
+        - Cell 1: POS
+        - Cell 2: NAME
+        - Cell 3: SALARY
+        - Cell 4: START (expected starter status)
+        - Cell 5: TEAM
+        - Cell 6: OPP
+        - Cell 7: DvP
+        - Cell 8: FD FP PROJECTED <- projection
+        - Cell 9: VALUE
+        - Cell 10+: Historical averages
 
         Args:
             row: BeautifulSoup row element
@@ -201,14 +211,27 @@ class DailyFantasyFuelSource(ProjectionSource):
             return None
 
         try:
-            # Extract core player info (FanDuel table structure)
-            # Cell 0 is player card (skip), Cell 1: POS, Cell 2: NAME, Cell 3: SALARY
-            # Cell 5: TEAM, Cell 6: OPP, Cell 7: DvP, Cell 8: FD FP PROJECTED
+            # NFL has no START column, other sports have it
+            # This shifts the column indices for NFL
+            has_start_column = sport != Sport.NFL
+
+            # Extract core player info
             position = cells[1].get_text(strip=True).upper()
             name = cells[2].get_text(strip=True)
             salary_text = cells[3].get_text(strip=True)
-            team = cells[5].get_text(strip=True).upper() if len(cells) > 5 else ""
-            opponent = cells[6].get_text(strip=True).upper() if len(cells) > 6 else ""
+
+            # Column indices differ based on START column presence
+            if has_start_column:
+                # NBA/MLB/NHL: Cell 4 is START, Cell 5 is TEAM
+                team_idx, opp_idx, dvp_idx, proj_idx, value_idx = 5, 6, 7, 8, 9
+                hist_start_idx = 10
+            else:
+                # NFL: No START column, Cell 4 is TEAM
+                team_idx, opp_idx, dvp_idx, proj_idx, value_idx = 4, 5, 6, 7, 8
+                hist_start_idx = 9
+
+            team = cells[team_idx].get_text(strip=True).upper() if len(cells) > team_idx else ""
+            opponent = cells[opp_idx].get_text(strip=True).upper() if len(cells) > opp_idx else ""
 
             # Clean up name - remove injury status suffixes (Q, O, D, etc.)
             name = re.sub(r'[QODP]$', '', name).strip()
@@ -224,18 +247,18 @@ class DailyFantasyFuelSource(ProjectionSource):
             # Parse salary (format: "$8.3k" or "$8300")
             salary = self._parse_salary(salary_text)
 
-            # Parse projected points at index 8 (FD FP PROJECTED)
-            proj_fpts_text = cells[8].get_text(strip=True) if len(cells) > 8 else "0"
+            # Parse projected points (FD FP PROJECTED)
+            proj_fpts_text = cells[proj_idx].get_text(strip=True) if len(cells) > proj_idx else "0"
             projected_points = self._parse_float(proj_fpts_text)
 
-            # Parse value (points per $1000) at index 9
-            value_text = cells[9].get_text(strip=True) if len(cells) > 9 else "0"
+            # Parse value (points per $1000)
+            value_text = cells[value_idx].get_text(strip=True) if len(cells) > value_idx else "0"
             value = self._parse_float(value_text)
 
             # Parse historical averages for floor/ceiling estimation
-            l5_avg = self._parse_float(cells[10].get_text(strip=True)) if len(cells) > 10 else None
-            l10_avg = self._parse_float(cells[11].get_text(strip=True)) if len(cells) > 11 else None
-            season_avg = self._parse_float(cells[12].get_text(strip=True)) if len(cells) > 12 else None
+            l5_avg = self._parse_float(cells[hist_start_idx].get_text(strip=True)) if len(cells) > hist_start_idx else None
+            l10_avg = self._parse_float(cells[hist_start_idx + 1].get_text(strip=True)) if len(cells) > hist_start_idx + 1 else None
+            season_avg = self._parse_float(cells[hist_start_idx + 2].get_text(strip=True)) if len(cells) > hist_start_idx + 2 else None
 
             # Estimate floor and ceiling from historical data
             floor = None

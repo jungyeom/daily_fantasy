@@ -159,16 +159,24 @@ class AutomationRunner:
             logger.info(f"Scheduled late_swap checks every {scheduler_config.late_swap_check_interval_minutes} min")
 
     def schedule_daily_jobs(self) -> None:
-        """Schedule recurring daily jobs."""
-        # Daily contest fetch (morning)
+        """Schedule recurring daily jobs.
+
+        Note on NFL scheduling:
+        - NFL games occur on Sun (main slate), Mon (MNF), Thu (TNF)
+        - Occasionally Fri/Sat games during holidays
+        - We fetch contests daily for all sports to catch all slates
+        """
+        # Daily contest fetch and pipeline scheduling (morning)
+        # Run for all sports every day to catch all possible slates
         for sport in [Sport.NFL, Sport.NBA, Sport.MLB, Sport.NHL]:
             self.scheduler.add_job(
-                self._run_fetch_contests,
+                self._run_fetch_and_schedule,
                 trigger=CronTrigger(hour=8, minute=0),
                 args=[sport],
-                id=f"daily_fetch_{sport.value}",
+                id=f"daily_pipeline_{sport.value}",
                 replace_existing=True,
             )
+            logger.info(f"Scheduled daily pipeline for {sport.value} at 8:00 AM")
 
         # Daily results fetch (evening)
         self.scheduler.add_job(
@@ -186,14 +194,18 @@ class AutomationRunner:
             replace_existing=True,
         )
 
-        logger.info("Scheduled daily jobs")
+        logger.info("Scheduled daily jobs for all sports")
 
     def schedule_sport_day(self, sport: Sport, day_of_week: str) -> None:
-        """Schedule full pipeline for a sport's typical day.
+        """Schedule full pipeline for a sport on a specific day.
+
+        Note: This is largely superseded by schedule_daily_jobs() which runs
+        daily for all sports. Use this only if you need sport-specific scheduling
+        on particular days.
 
         Args:
             sport: Sport
-            day_of_week: Day name (e.g., 'sunday' for NFL)
+            day_of_week: Day name (e.g., 'sunday', 'monday', 'thursday')
         """
         day_map = {
             "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,

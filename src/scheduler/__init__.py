@@ -11,9 +11,11 @@ from .alerts import AlertSeverity, EmailAlerter, get_alerter, send_alert
 from .contest_filter import ContestFilter, ContestFilterConfig
 from .fill_monitor import FillMonitor, FillMonitorConfig
 from .player_swapper import PlayerSwapper, check_and_swap_injuries
+from .runner import AutomationRunner, get_runner, run_full_pipeline
 
 __all__ = [
     "AlertSeverity",
+    "AutomationRunner",
     "ContestFilter",
     "ContestFilterConfig",
     "EmailAlerter",
@@ -22,5 +24,7 @@ __all__ = [
     "PlayerSwapper",
     "check_and_swap_injuries",
     "get_alerter",
+    "get_runner",
+    "run_full_pipeline",
     "send_alert",
 ]

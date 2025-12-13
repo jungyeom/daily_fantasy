@@ -105,7 +105,7 @@ def run_single_step(mode: str, sport: Sport, contest_id: str, dry_run: bool = Fa
         contest_id: Contest ID
         dry_run: Don't submit if True
     """
-    from src.scheduler.jobs import (
+    from src.scheduler.job_functions import (
         JobContext,
         job_fetch_player_pool,
         job_fetch_projections,
@@ -153,7 +153,7 @@ def run_for_all_contests(sport: Sport, mode: str, dry_run: bool = False):
         mode: Pipeline mode
         dry_run: Don't submit if True
     """
-    from src.scheduler.jobs import JobContext, job_fetch_contests
+    from src.scheduler.job_functions import JobContext, job_fetch_contests
     from src.common.database import get_database, ContestDB
     from src.common.config import get_config
 

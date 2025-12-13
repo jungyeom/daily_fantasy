@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.common.config import get_config
 from src.common.database import init_database
 from src.common.models import Sport
-from src.scheduler.jobs import JobContext, job_fetch_contests
+from src.scheduler.job_functions import JobContext, job_fetch_contests
 
 logging.basicConfig(
     level=logging.INFO,

@@ -18,7 +18,7 @@ class DailyFantasyFuelSource(ProjectionSource):
     """Scrapes player projections from DailyFantasyFuel.
 
     DFF provides free projections for DraftKings and FanDuel formats.
-    We scrape DraftKings projections and transform to Yahoo format.
+    We scrape FanDuel projections since Yahoo scoring is closer to FanDuel.
     """
 
     BASE_URL = "https://www.dailyfantasyfuel.com"
@@ -105,8 +105,9 @@ class DailyFantasyFuelSource(ProjectionSource):
 
         try:
             # Build URL for projections page
+            # Use FanDuel projections - Yahoo scoring is closer to FanDuel than DraftKings
             sport_path = self.SPORT_PATHS[sport]
-            url = f"{self.BASE_URL}/{sport_path}/projections/draftkings"
+            url = f"{self.BASE_URL}/{sport_path}/projections/fanduel"
 
             # Fetch page
             response = self.session.get(url, timeout=30)
@@ -171,20 +172,20 @@ class DailyFantasyFuelSource(ProjectionSource):
     def _parse_player_row(self, row, sport: Sport) -> Optional[Projection]:
         """Parse a single player row.
 
-        DFF table cell structure (as of Dec 2024):
-        - Cell 0: Combined info card (player card with redundant info)
+        DFF FanDuel table cell structure (as of Dec 2024):
+        - Cell 0: Player card (combined info - skip this)
         - Cell 1: Position (POS)
-        - Cell 2: Name (NAME)
+        - Cell 2: Name (NAME) - full name
         - Cell 3: Salary (SALARY) - format: "$8.3k"
-        - Cell 4: Team (TEAM)
-        - Cell 5: Opponent (OPP)
-        - Cell 6: DvP rank
-        - Cell 7: Projected FPTS (DKFPPROJECTED) <- actual projection!
-        - Cell 8: Value (VALUEPROJECTED)
-        - Cell 9: L5 Avg
-        - Cell 10: L10 Avg
-        - Cell 11: Season Avg
-        - Cell 12: Spread
+        - Cell 4: Start (expected starter status)
+        - Cell 5: Team (TEAM)
+        - Cell 6: Opponent (OPP)
+        - Cell 7: DvP rank (Defense vs Position) - NOT the projection!
+        - Cell 8: FD FP PROJECTED <- FanDuel fantasy points projection
+        - Cell 9: Value (VALUEPROJECTED)
+        - Cell 10: L5 Avg
+        - Cell 11: L10 Avg
+        - Cell 12: Season Avg
         - Cell 13: O/U (Over/Under)
         - Cell 14: Team Points
 
@@ -196,16 +197,18 @@ class DailyFantasyFuelSource(ProjectionSource):
             Projection object or None
         """
         cells = row.find_all("td")
-        if len(cells) < 8:  # Need at least 8 cells to get projected points
+        if len(cells) < 9:  # Need at least 9 cells to get projected points
             return None
 
         try:
-            # Extract core player info
+            # Extract core player info (FanDuel table structure)
+            # Cell 0 is player card (skip), Cell 1: POS, Cell 2: NAME, Cell 3: SALARY
+            # Cell 5: TEAM, Cell 6: OPP, Cell 7: DvP, Cell 8: FD FP PROJECTED
             position = cells[1].get_text(strip=True).upper()
             name = cells[2].get_text(strip=True)
             salary_text = cells[3].get_text(strip=True)
-            team = cells[4].get_text(strip=True).upper() if len(cells) > 4 else ""
-            opponent = cells[5].get_text(strip=True).upper() if len(cells) > 5 else ""
+            team = cells[5].get_text(strip=True).upper() if len(cells) > 5 else ""
+            opponent = cells[6].get_text(strip=True).upper() if len(cells) > 6 else ""
 
             # Clean up name - remove injury status suffixes (Q, O, D, etc.)
             name = re.sub(r'[QODP]$', '', name).strip()
@@ -221,18 +224,18 @@ class DailyFantasyFuelSource(ProjectionSource):
             # Parse salary (format: "$8.3k" or "$8300")
             salary = self._parse_salary(salary_text)
 
-            # Parse projected points at index 7 (DKFPPROJECTED)
-            proj_fpts_text = cells[7].get_text(strip=True) if len(cells) > 7 else "0"
+            # Parse projected points at index 8 (FD FP PROJECTED)
+            proj_fpts_text = cells[8].get_text(strip=True) if len(cells) > 8 else "0"
             projected_points = self._parse_float(proj_fpts_text)
 
-            # Parse value (points per $1000) at index 8
-            value_text = cells[8].get_text(strip=True) if len(cells) > 8 else "0"
+            # Parse value (points per $1000) at index 9
+            value_text = cells[9].get_text(strip=True) if len(cells) > 9 else "0"
             value = self._parse_float(value_text)
 
             # Parse historical averages for floor/ceiling estimation
-            l5_avg = self._parse_float(cells[9].get_text(strip=True)) if len(cells) > 9 else None
-            l10_avg = self._parse_float(cells[10].get_text(strip=True)) if len(cells) > 10 else None
-            season_avg = self._parse_float(cells[11].get_text(strip=True)) if len(cells) > 11 else None
+            l5_avg = self._parse_float(cells[10].get_text(strip=True)) if len(cells) > 10 else None
+            l10_avg = self._parse_float(cells[11].get_text(strip=True)) if len(cells) > 11 else None
+            season_avg = self._parse_float(cells[12].get_text(strip=True)) if len(cells) > 12 else None
 
             # Estimate floor and ceiling from historical data
             floor = None

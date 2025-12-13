@@ -23,18 +23,33 @@ class YahooConfig(BaseModel):
 class EmailConfig(BaseModel):
     """Email notification settings."""
     enabled: bool = False
+    provider: str = "sendgrid"  # "sendgrid" or "smtp"
+
+    # SendGrid settings
+    sendgrid_api_key: str = ""
+
+    # SMTP settings (fallback)
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
-    username: str = ""
-    password: str = ""  # App password for Gmail
+    smtp_username: str = ""
+    smtp_password: str = ""  # App password for Gmail
+
+    # Common settings
     from_address: str = ""
-    to_addresses: list[str] = []
+    to_address: str = ""  # Single address (will be converted to list internally)
 
     # Notification triggers
     notify_on_submission: bool = True
     notify_on_late_swap: bool = True
     notify_on_results: bool = True
     notify_on_error: bool = True
+
+    @property
+    def to_addresses(self) -> list[str]:
+        """Get recipient addresses as a list."""
+        if self.to_address:
+            return [addr.strip() for addr in self.to_address.split(",") if addr.strip()]
+        return []
 
 
 class DatabaseConfig(BaseModel):

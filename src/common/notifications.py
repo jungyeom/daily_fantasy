@@ -6,6 +6,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail, Email, To, Content
+
 from .config import get_config, EmailConfig
 from .exceptions import EmailSendError
 
@@ -26,7 +29,7 @@ class EmailNotifier:
         self.config = config
 
     def _send_email(self, subject: str, body_html: str, body_text: str) -> bool:
-        """Send an email.
+        """Send an email using configured provider (SendGrid or SMTP).
 
         Args:
             subject: Email subject line
@@ -47,9 +50,68 @@ class EmailNotifier:
             logger.warning("No recipient addresses configured")
             return False
 
+        full_subject = f"[Daily Fantasy] {subject}"
+
+        if self.config.provider == "sendgrid":
+            return self._send_via_sendgrid(full_subject, body_html, body_text)
+        else:
+            return self._send_via_smtp(full_subject, body_html, body_text)
+
+    def _send_via_sendgrid(self, subject: str, body_html: str, body_text: str) -> bool:
+        """Send email via SendGrid API.
+
+        Args:
+            subject: Email subject line
+            body_html: HTML body content
+            body_text: Plain text body content
+
+        Returns:
+            True if sent successfully
+        """
+        if not self.config.sendgrid_api_key:
+            logger.error("SendGrid API key not configured")
+            raise EmailSendError("SendGrid API key not configured")
+
+        try:
+            sg = SendGridAPIClient(api_key=self.config.sendgrid_api_key)
+
+            # Create message for each recipient
+            for to_addr in self.config.to_addresses:
+                message = Mail(
+                    from_email=Email(self.config.from_address),
+                    to_emails=To(to_addr),
+                    subject=subject,
+                    plain_text_content=Content("text/plain", body_text),
+                    html_content=Content("text/html", body_html),
+                )
+
+                response = sg.send(message)
+
+                if response.status_code not in (200, 201, 202):
+                    logger.error(f"SendGrid error: {response.status_code} - {response.body}")
+                    raise EmailSendError(f"SendGrid returned status {response.status_code}")
+
+            logger.info(f"Email sent via SendGrid: {subject}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send email via SendGrid: {e}")
+            raise EmailSendError(f"SendGrid error: {e}") from e
+
+    def _send_via_smtp(self, subject: str, body_html: str, body_text: str) -> bool:
+        """Send email via SMTP.
+
+        Args:
+            subject: Email subject line
+            body_html: HTML body content
+            body_text: Plain text body content
+
+        Returns:
+            True if sent successfully
+        """
         try:
             msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"[Daily Fantasy] {subject}"
+            msg["Subject"] = subject
             msg["From"] = self.config.from_address
             msg["To"] = ", ".join(self.config.to_addresses)
 
@@ -59,21 +121,21 @@ class EmailNotifier:
 
             with smtplib.SMTP(self.config.smtp_host, self.config.smtp_port) as server:
                 server.starttls()
-                server.login(self.config.username, self.config.password)
+                server.login(self.config.smtp_username, self.config.smtp_password)
                 server.sendmail(
                     self.config.from_address,
                     self.config.to_addresses,
                     msg.as_string(),
                 )
 
-            logger.info(f"Email sent: {subject}")
+            logger.info(f"Email sent via SMTP: {subject}")
             return True
 
         except smtplib.SMTPException as e:
-            logger.error(f"Failed to send email: {e}")
+            logger.error(f"Failed to send email via SMTP: {e}")
             raise EmailSendError(f"SMTP error: {e}") from e
         except Exception as e:
-            logger.error(f"Failed to send email: {e}")
+            logger.error(f"Failed to send email via SMTP: {e}")
             raise EmailSendError(str(e)) from e
 
     def notify_lineups_submitted(

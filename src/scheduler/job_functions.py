@@ -528,6 +528,148 @@ def job_send_daily_report(context: JobContext) -> bool:
         return False
 
 
+def job_refresh_projections_dynamic(context: JobContext, sport: Sport) -> int:
+    """Refresh projections for contests based on time-to-lock.
+
+    Uses tiered refresh intervals:
+    - > 24 hours to lock: every 6 hours (default_interval)
+    - 6-24 hours to lock: every 2 hours (day_of_interval)
+    - 1-6 hours to lock: every 30 min (approaching_interval)
+    - < 1 hour to lock: every 10 min (imminent_interval)
+
+    Args:
+        context: Job context
+        sport: Sport to refresh projections for
+
+    Returns:
+        Number of contests refreshed
+    """
+    logger.info(f"Running job: refresh_projections_dynamic for {sport.value}")
+
+    try:
+        from datetime import timedelta
+
+        # Get contests from database
+        session = context.db.get_session()
+        try:
+            now = datetime.now()
+            contests = (
+                session.query(ContestDB)
+                .filter(ContestDB.sport == sport.value)
+                .filter(ContestDB.slate_start > now)
+                .all()
+            )
+
+            if not contests:
+                logger.info(f"No upcoming {sport.value} contests")
+                return 0
+
+            refreshed_count = 0
+
+            for contest in contests:
+                time_to_lock = contest.slate_start - now
+                hours_to_lock = time_to_lock.total_seconds() / 3600
+
+                # Determine if we should refresh based on time-to-lock tier
+                should_refresh = _should_refresh_projections(
+                    contest.id, hours_to_lock, context.config.scheduler
+                )
+
+                if should_refresh:
+                    logger.info(
+                        f"Refreshing projections for contest {contest.id} "
+                        f"({hours_to_lock:.1f}h to lock)"
+                    )
+
+                    # Fetch fresh projections (call local function directly)
+                    job_fetch_projections(context, sport, contest.id)
+                    refreshed_count += 1
+
+            logger.info(f"Refreshed projections for {refreshed_count} contests")
+            return refreshed_count
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"Job refresh_projections_dynamic failed: {e}")
+        context.notifier.notify_error(
+            error_type="JobError",
+            error_message=str(e),
+            context={"job": "refresh_projections_dynamic", "sport": sport.value},
+        )
+        return 0
+
+
+# Cache to track last refresh time per contest
+_last_projection_refresh: dict[str, datetime] = {}
+
+
+def _should_refresh_projections(contest_id: str, hours_to_lock: float, scheduler_config) -> bool:
+    """Determine if projections should be refreshed based on time-to-lock tier.
+
+    Uses tiered refresh intervals - refreshes more frequently as lock time approaches.
+    Tracks last refresh time per contest to avoid redundant refreshes.
+
+    Args:
+        contest_id: Contest ID
+        hours_to_lock: Hours until contest lock
+        scheduler_config: Scheduler configuration
+
+    Returns:
+        True if projections should be refreshed
+    """
+    from datetime import timedelta
+
+    now = datetime.now()
+
+    # Get refresh intervals from config (in minutes)
+    projection_config = getattr(scheduler_config, 'projection_refresh', {})
+    imminent_interval = projection_config.get('imminent_interval', 10)  # < 1 hour
+    approaching_interval = projection_config.get('approaching_interval', 30)  # 1-6 hours
+    day_of_interval = projection_config.get('day_of_interval', 120)  # 6-24 hours
+    default_interval = projection_config.get('default_interval', 360)  # > 24 hours
+
+    # Determine required interval based on time-to-lock tier
+    if hours_to_lock <= 1:
+        required_interval = timedelta(minutes=imminent_interval)
+        tier = "imminent"
+    elif hours_to_lock <= 6:
+        required_interval = timedelta(minutes=approaching_interval)
+        tier = "approaching"
+    elif hours_to_lock <= 24:
+        required_interval = timedelta(minutes=day_of_interval)
+        tier = "day_of"
+    else:
+        required_interval = timedelta(minutes=default_interval)
+        tier = "default"
+
+    # Check if we've refreshed recently
+    last_refresh = _last_projection_refresh.get(contest_id)
+    if last_refresh is None:
+        # Never refreshed - do it now
+        _last_projection_refresh[contest_id] = now
+        logger.debug(f"Contest {contest_id}: First refresh ({tier} tier)")
+        return True
+
+    time_since_refresh = now - last_refresh
+    if time_since_refresh >= required_interval:
+        # Enough time has passed - refresh
+        _last_projection_refresh[contest_id] = now
+        logger.debug(
+            f"Contest {contest_id}: Refreshing after {time_since_refresh.total_seconds()/60:.0f} min "
+            f"({tier} tier, interval={required_interval.total_seconds()/60:.0f} min)"
+        )
+        return True
+
+    # Not time yet
+    logger.debug(
+        f"Contest {contest_id}: Skipping refresh, {time_since_refresh.total_seconds()/60:.0f} min "
+        f"since last ({tier} tier, need {required_interval.total_seconds()/60:.0f} min)"
+    )
+    return False
+
+
 def job_check_injuries(context: JobContext, sport: Sport) -> int:
     """Check for injured players and trigger lineup edits.
 
@@ -644,8 +786,7 @@ def job_check_fill_rates(context: JobContext, sport: Sport) -> int:
             logger.info(f"Submitting contest {contest_id}: {status.reason}")
 
             try:
-                # Generate lineups and submit
-                from .jobs import job_generate_lineups, job_submit_lineups
+                # Generate lineups and submit (call local functions directly)
 
                 # Generate fresh lineups
                 job_generate_lineups(context, sport, contest_id)

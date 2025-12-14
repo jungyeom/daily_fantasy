@@ -209,7 +209,12 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 </html>
 """
 
-        return self._send_email(subject, body_html, body_text)
+        # Catch email send failures gracefully so notifications don't crash jobs
+        try:
+            return self._send_email(subject, body_html, body_text)
+        except EmailSendError as e:
+            logger.error(f"Failed to send lineups submitted notification email: {e}")
+            return False
 
     def notify_late_swap(
         self,
@@ -418,7 +423,12 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 </html>
 """
 
-        return self._send_email(subject, body_html, body_text)
+        # Catch email send failures gracefully so notifications don't crash jobs
+        try:
+            return self._send_email(subject, body_html, body_text)
+        except EmailSendError as e:
+            logger.error(f"Failed to send success notification email: {e}")
+            return False
 
     def notify_error(
         self,

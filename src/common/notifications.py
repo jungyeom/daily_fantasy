@@ -483,7 +483,13 @@ Context:
 </html>
 """
 
-        return self._send_email(subject, body_html, body_text)
+        # Catch email send failures gracefully. notify_error is typically called from
+        # exception handlers, and a failed notification should not mask the original error.
+        try:
+            return self._send_email(subject, body_html, body_text)
+        except EmailSendError as e:
+            logger.error(f"Failed to send error notification email: {e}")
+            return False
 
 
 # Singleton instance

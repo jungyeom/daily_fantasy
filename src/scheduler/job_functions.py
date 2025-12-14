@@ -59,10 +59,10 @@ def job_fetch_contests(context: JobContext, sport: Sport) -> int:
     try:
         from ..yahoo.contests import ContestFetcher
 
-        driver = context.get_driver()
         fetcher = ContestFetcher()
 
-        contests = fetcher.fetch_contests(driver, sport)
+        # API-based fetch - driver no longer required
+        contests = fetcher.fetch_contests(sport)
         logger.info(f"Fetched {len(contests)} {sport.value} contests")
 
         return len(contests)
@@ -97,10 +97,10 @@ def job_fetch_player_pool(
     try:
         from ..yahoo.players import PlayerPoolFetcher
 
-        driver = context.get_driver()
         fetcher = PlayerPoolFetcher()
 
-        players = fetcher.fetch_player_pool(driver, contest_id, sport)
+        # API-based fetch - driver no longer required
+        players = fetcher.fetch_player_pool(contest_id, sport)
         logger.info(f"Fetched {len(players)} players for contest {contest_id}")
 
         return len(players)
@@ -674,8 +674,8 @@ def job_check_injuries(context: JobContext, sport: Sport) -> int:
     """Check for injured players and trigger lineup edits.
 
     This job monitors player injury statuses and:
-    1. Refreshes player pool injury data from Yahoo API
-    2. Finds OUT/INJ players in submitted lineups
+    1. Finds active contests with submitted lineups
+    2. For each contest within edit window, check for OUT/INJ players
     3. Swaps them with best available replacements
     4. Re-uploads edited lineups to Yahoo
 
@@ -689,38 +689,64 @@ def job_check_injuries(context: JobContext, sport: Sport) -> int:
     logger.info(f"Running job: check_injuries for {sport.value}")
 
     try:
-        from ..scheduler.jobs.injury_monitor import InjuryMonitorJob
-        from ..scheduler.fill_monitor import FillMonitorConfig
+        from datetime import datetime, timedelta
+        from ..common.database import get_database, ContestDB
+        from ..scheduler.player_swapper import check_and_swap_injuries
 
-        # Get config from settings
+        db = get_database()
+        session = db.get_session()
+
+        # Get config for edit window
         scheduler_cfg = context.config.scheduler
+        stop_editing_minutes = getattr(scheduler_cfg, 'stop_editing_minutes', 5)
 
-        # Create fill config for edit window checking
-        fill_config = FillMonitorConfig(
-            fill_rate_threshold=scheduler_cfg.fill_rate_threshold,
-            time_before_lock_minutes=int(scheduler_cfg.submit_lineups_hours_before * 60),
-            stop_editing_minutes=scheduler_cfg.stop_editing_minutes,
-        )
-
-        # Run injury monitor job
-        job = InjuryMonitorJob(dry_run=False, fill_config=fill_config)
-        result = job.execute(sport=sport.value.lower())
-
-        total_swaps = result.get("total_swaps", 0)
-        contests_checked = result.get("contests_checked", 0)
-
-        logger.info(
-            f"Injury check complete: {contests_checked} contests checked, "
-            f"{total_swaps} swaps performed"
-        )
-
-        if total_swaps > 0:
-            context.notifier.notify_success(
-                title=f"{sport.value} Injury Swaps Complete",
-                message=f"Made {total_swaps} player swaps across {contests_checked} contests",
+        try:
+            now = datetime.now()
+            # Find contests that:
+            # 1. Match the sport
+            # 2. Have entries submitted (status = 'submitted')
+            # 3. Are still within edit window (not locked yet, not too close to lock)
+            contests = (
+                session.query(ContestDB)
+                .filter(ContestDB.sport == sport.value)
+                .filter(ContestDB.status == "submitted")
+                .filter(ContestDB.slate_start > now + timedelta(minutes=stop_editing_minutes))
+                .all()
             )
 
-        return total_swaps
+            total_swaps = 0
+            contests_checked = 0
+
+            for contest in contests:
+                contests_checked += 1
+                logger.info(f"Checking injuries for contest {contest.id}: {contest.name}")
+
+                try:
+                    results = check_and_swap_injuries(contest.id, dry_run=False)
+                    swaps_made = len([r for r in results if r.success])
+                    total_swaps += swaps_made
+
+                    if swaps_made > 0:
+                        logger.info(f"Made {swaps_made} swaps for contest {contest.id}")
+
+                except Exception as e:
+                    logger.error(f"Error checking injuries for contest {contest.id}: {e}")
+
+            logger.info(
+                f"Injury check complete: {contests_checked} contests checked, "
+                f"{total_swaps} swaps performed"
+            )
+
+            if total_swaps > 0:
+                context.notifier.notify_success(
+                    title=f"{sport.value} Injury Swaps Complete",
+                    message=f"Made {total_swaps} player swaps across {contests_checked} contests",
+                )
+
+            return total_swaps
+
+        finally:
+            session.close()
 
     except Exception as e:
         logger.error(f"Job check_injuries failed: {e}")
@@ -764,10 +790,9 @@ def job_check_fill_rates(context: JobContext, sport: Sport) -> int:
         )
         monitor = FillMonitor(monitor_config)
 
-        # Fetch fresh contest data from Yahoo
-        driver = context.get_driver()
+        # Fetch fresh contest data from Yahoo API
         fetcher = ContestFetcher()
-        contests = fetcher.fetch_contests(driver, sport)
+        contests = fetcher.fetch_contests(sport)
 
         if not contests:
             logger.info(f"No {sport.value} contests found")

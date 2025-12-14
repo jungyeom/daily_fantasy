@@ -20,6 +20,7 @@ Usage:
 import argparse
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -50,20 +51,21 @@ SPORT_MAP = {
 }
 
 
-def get_player_pool_for_slate(entries: list[dict], sport: Sport) -> list[Player]:
+def get_player_pool_for_slate(entries: list[dict], sport: Sport) -> tuple[list[Player], bool]:
     """Fetch player pool for a slate based on entries.
 
     Uses the contest_id from entries to fetch the player pool from Yahoo API.
+    Also determines if the slate has started (some games already in progress).
 
     Args:
         entries: List of entry dicts from template (contains contest_id)
         sport: Sport enum
 
     Returns:
-        List of Player objects
+        Tuple of (List of Player objects, slate_has_started bool)
     """
     if not entries:
-        return []
+        return [], False
 
     # Get a contest_id from entries
     contest_id = None
@@ -75,17 +77,20 @@ def get_player_pool_for_slate(entries: list[dict], sport: Sport) -> list[Player]
 
     if not contest_id:
         logger.error("No contest_id found in entries")
-        return []
+        return [], False
 
     logger.info(f"Fetching player pool for contest {contest_id}")
 
     api = YahooDFSApiClient()
+    now = datetime.now()
 
     try:
         raw_players = api.get_contest_players(contest_id)
 
         players = []
         injured_count = 0
+        locked_count = 0
+        unlocked_count = 0
 
         for raw in raw_players:
             parsed = parse_api_player(raw, contest_id)
@@ -99,6 +104,15 @@ def get_player_pool_for_slate(entries: list[dict], sport: Sport) -> list[Player]
                 logger.debug(f"Skipping injured player: {parsed['name']} ({status})")
                 continue
 
+            # Check if player's game has started
+            game_time = parsed.get("game_time")
+            is_locked = False
+            if game_time and game_time <= now:
+                is_locked = True
+                locked_count += 1
+            else:
+                unlocked_count += 1
+
             player = Player(
                 yahoo_player_id=parsed["yahoo_player_id"],
                 player_game_code=parsed.get("player_game_code"),
@@ -107,15 +121,27 @@ def get_player_pool_for_slate(entries: list[dict], sport: Sport) -> list[Player]
                 position=parsed["position"],
                 salary=parsed["salary"],
                 injury_status=status if status else None,
+                game_time=game_time,
+                is_locked=is_locked,
             )
             players.append(player)
 
-        logger.info(f"Loaded {len(players)} players (excluded {injured_count} injured/out players)")
-        return players
+        # Slate has started if any games have started
+        slate_has_started = locked_count > 0
+
+        logger.info(f"Loaded {len(players)} players (excluded {injured_count} injured/out)")
+        logger.info(f"Game status: {locked_count} locked (game started), {unlocked_count} unlocked (upcoming)")
+
+        if slate_has_started:
+            logger.info("LATE-SWAP MODE: Slate has started, will only swap unlocked players")
+        else:
+            logger.info("FULL OPTIMIZATION MODE: Slate has not started, can fully re-optimize")
+
+        return players, slate_has_started
 
     except Exception as e:
         logger.error(f"Failed to fetch player pool: {e}")
-        return []
+        return [], False
 
 
 def apply_projections(players: list[Player], sport: Sport) -> list[Player]:
@@ -164,6 +190,10 @@ def generate_lineups_for_entries(
 
     This is the lineup generator function passed to edit_all_slates().
 
+    Handles two scenarios:
+    1. Slate not started: Full re-optimization with updated projections/injuries
+    2. Slate started (late-swap): Only swap players whose games haven't started
+
     Args:
         entries: List of entry dicts from template
         sport_str: Sport string (nfl, nba, etc.)
@@ -191,8 +221,8 @@ def generate_lineups_for_entries(
         logger.error("No contest_id found in entries")
         return []
 
-    # Fetch player pool
-    players = get_player_pool_for_slate(entries, sport)
+    # Fetch player pool and determine if late-swap is needed
+    players, slate_has_started = get_player_pool_for_slate(entries, sport)
 
     if not players:
         logger.error("No players found for slate")
@@ -217,18 +247,29 @@ def generate_lineups_for_entries(
 
     # Build lineups
     try:
-        builder = LineupBuilder(
-            sport=sport,
-            single_game=is_single_game,
-            salary_cap=200,  # Yahoo uses $200 cap
-        )
+        if slate_has_started:
+            # LATE-SWAP MODE: Only swap unlocked players
+            lineups = generate_late_swap_lineups(
+                entries=entries,
+                players=players,
+                sport=sport,
+                is_single_game=is_single_game,
+                contest_id=contest_id,
+            )
+        else:
+            # FULL OPTIMIZATION MODE: Generate completely new lineups
+            builder = LineupBuilder(
+                sport=sport,
+                single_game=is_single_game,
+                salary_cap=200,  # Yahoo uses $200 cap
+            )
 
-        lineups = builder.build_lineups(
-            players=players,
-            num_lineups=num_lineups,
-            contest_id=contest_id,
-            save_to_db=False,  # Don't save to DB during edit
-        )
+            lineups = builder.build_lineups(
+                players=players,
+                num_lineups=num_lineups,
+                contest_id=contest_id,
+                save_to_db=False,  # Don't save to DB during edit
+            )
 
         logger.info(f"Generated {len(lineups)} lineups")
 
@@ -237,13 +278,282 @@ def generate_lineups_for_entries(
             lineup = lineups[0]
             logger.info(f"Sample lineup - Projected: {lineup.projected_points:.1f} pts, Salary: ${lineup.total_salary}")
             for p in lineup.players:
-                logger.info(f"  {p.roster_position:10} {p.name:25} ${p.salary:5} {p.projected_points:.1f}")
+                locked_marker = " [LOCKED]" if getattr(p, 'is_locked', False) else ""
+                logger.info(f"  {p.roster_position:10} {p.name:25} ${p.salary:5} {p.projected_points:.1f}{locked_marker}")
 
         return lineups
 
     except Exception as e:
         logger.error(f"Lineup generation failed: {e}")
+        import traceback
+        traceback.print_exc()
         return []
+
+
+def generate_late_swap_lineups(
+    entries: list[dict],
+    players: list[Player],
+    sport: Sport,
+    is_single_game: bool,
+    contest_id: str,
+) -> list[Lineup]:
+    """Generate lineups for late-swap scenario.
+
+    For each existing entry, keeps locked players and optimizes unlocked positions.
+
+    Args:
+        entries: List of entry dicts from template (with current player codes)
+        players: Player pool with is_locked flags set
+        sport: Sport enum
+        is_single_game: Whether this is a single-game contest
+        contest_id: Contest ID
+
+    Returns:
+        List of Lineup objects with locked players preserved
+    """
+    logger.info(f"Late-swap: Processing {len(entries)} entries")
+
+    # Create lookup maps
+    player_by_code = {p.player_game_code: p for p in players if p.player_game_code}
+    player_by_id = {p.yahoo_player_id: p for p in players}
+
+    # Get unlocked players for optimization
+    unlocked_players = [p for p in players if not p.is_locked and p.projected_points and p.projected_points > 0]
+    locked_players = [p for p in players if p.is_locked]
+
+    logger.info(f"Late-swap pool: {len(locked_players)} locked, {len(unlocked_players)} unlocked available")
+
+    lineups = []
+
+    for entry in entries:
+        entry_id = entry.get("entry_id")
+        current_players = entry.get("players", {})
+
+        # Parse current lineup from entry
+        locked_in_lineup = []
+        positions_to_optimize = []
+        locked_salary = 0
+
+        for pos, player_code in current_players.items():
+            if not player_code:
+                positions_to_optimize.append(pos)
+                continue
+
+            # Find player by code
+            player = player_by_code.get(player_code)
+            if not player:
+                # Try by ID (extract from code like "nfl.p.12345$nfl.g.xxx")
+                player_id = player_code.split("$")[0] if "$" in player_code else player_code
+                player = player_by_id.get(player_id)
+
+            if player and player.is_locked:
+                # Player's game has started - must keep them
+                locked_in_lineup.append((pos, player))
+                locked_salary += player.salary
+            else:
+                # Player's game hasn't started - can swap them
+                positions_to_optimize.append(pos)
+
+        logger.debug(f"Entry {entry_id}: {len(locked_in_lineup)} locked, {len(positions_to_optimize)} to optimize")
+
+        # If all positions are locked, keep the lineup as-is
+        if not positions_to_optimize:
+            lineup = create_lineup_from_entry(entry, players, player_by_code, player_by_id)
+            if lineup:
+                lineups.append(lineup)
+            continue
+
+        # Optimize the unlocked positions
+        remaining_salary = 200 - locked_salary  # Yahoo salary cap is $200
+
+        # Create a lineup with locked players and best available for unlocked positions
+        lineup = optimize_unlocked_positions(
+            locked_players=locked_in_lineup,
+            positions_to_optimize=positions_to_optimize,
+            available_players=unlocked_players,
+            remaining_salary=remaining_salary,
+            is_single_game=is_single_game,
+            entry_id=entry_id,
+            contest_id=contest_id,
+        )
+
+        if lineup:
+            lineups.append(lineup)
+
+    logger.info(f"Late-swap: Generated {len(lineups)} optimized lineups")
+    return lineups
+
+
+def create_lineup_from_entry(
+    entry: dict,
+    players: list[Player],
+    player_by_code: dict,
+    player_by_id: dict,
+) -> Optional[Lineup]:
+    """Create a Lineup object from an entry dict.
+
+    Args:
+        entry: Entry dict from template
+        players: Player pool
+        player_by_code: Lookup by player_game_code
+        player_by_id: Lookup by yahoo_player_id
+
+    Returns:
+        Lineup object or None
+    """
+    lineup_players = []
+    total_salary = 0
+    total_projected = 0
+
+    for pos, player_code in entry.get("players", {}).items():
+        if not player_code:
+            continue
+
+        player = player_by_code.get(player_code)
+        if not player:
+            player_id = player_code.split("$")[0] if "$" in player_code else player_code
+            player = player_by_id.get(player_id)
+
+        if player:
+            lineup_player = LineupPlayer(
+                yahoo_player_id=player.yahoo_player_id,
+                player_game_code=player.player_game_code or player.yahoo_player_id,
+                name=player.name,
+                roster_position=pos.replace("1", "").replace("2", "").replace("3", ""),  # RB1 -> RB
+                actual_position=player.position,
+                salary=player.salary,
+                projected_points=player.projected_points or 0,
+            )
+            lineup_players.append(lineup_player)
+            total_salary += player.salary
+            total_projected += player.projected_points or 0
+
+    if not lineup_players:
+        return None
+
+    return Lineup(
+        series_id=0,  # Placeholder for edit lineups
+        players=lineup_players,
+        total_salary=total_salary,
+        projected_points=total_projected,
+        entry_id=entry.get("entry_id"),
+        contest_id=entry.get("contest_id"),
+    )
+
+
+def optimize_unlocked_positions(
+    locked_players: list[tuple[str, Player]],
+    positions_to_optimize: list[str],
+    available_players: list[Player],
+    remaining_salary: int,
+    is_single_game: bool,
+    entry_id: str,
+    contest_id: str,
+) -> Optional[Lineup]:
+    """Optimize unlocked positions while keeping locked players.
+
+    Uses a greedy approach to fill unlocked positions with best value players.
+
+    Args:
+        locked_players: List of (position, Player) tuples for locked players
+        positions_to_optimize: List of position strings to fill
+        available_players: Pool of unlocked players
+        remaining_salary: Salary cap remaining after locked players
+        is_single_game: Whether this is a single-game contest
+        entry_id: Entry ID
+        contest_id: Contest ID
+
+    Returns:
+        Lineup object or None
+    """
+    lineup_players = []
+    used_player_ids = set()
+
+    # Add locked players first
+    for pos, player in locked_players:
+        base_pos = pos.replace("1", "").replace("2", "").replace("3", "")
+        lineup_player = LineupPlayer(
+            yahoo_player_id=player.yahoo_player_id,
+            player_game_code=player.player_game_code or player.yahoo_player_id,
+            name=player.name,
+            roster_position=base_pos,
+            actual_position=player.position,
+            salary=player.salary,
+            projected_points=player.projected_points or 0,
+        )
+        lineup_players.append(lineup_player)
+        used_player_ids.add(player.yahoo_player_id)
+
+    # Sort available players by value (points per dollar)
+    sorted_players = sorted(
+        [p for p in available_players if p.projected_points and p.projected_points > 0],
+        key=lambda p: p.projected_points / max(p.salary, 1),
+        reverse=True,
+    )
+
+    # Fill unlocked positions greedily
+    salary_remaining = remaining_salary
+
+    for pos in positions_to_optimize:
+        # Determine which positions are eligible for this slot
+        base_pos = pos.replace("1", "").replace("2", "").replace("3", "")
+
+        if base_pos == "FLEX":
+            # FLEX can be RB, WR, or TE
+            eligible_positions = {"RB", "WR", "TE"}
+        elif base_pos == "UTIL":
+            # UTIL can be any position
+            eligible_positions = None  # Any position
+        elif is_single_game and base_pos in ("SUPERSTAR", "STAR", "PRO"):
+            # Single-game positions can be any player
+            eligible_positions = None
+        else:
+            eligible_positions = {base_pos}
+
+        # Find best available player for this position
+        best_player = None
+        for player in sorted_players:
+            if player.yahoo_player_id in used_player_ids:
+                continue
+            if player.salary > salary_remaining:
+                continue
+            if eligible_positions and player.position not in eligible_positions:
+                continue
+
+            best_player = player
+            break
+
+        if best_player:
+            lineup_player = LineupPlayer(
+                yahoo_player_id=best_player.yahoo_player_id,
+                player_game_code=best_player.player_game_code or best_player.yahoo_player_id,
+                name=best_player.name,
+                roster_position=base_pos,
+                actual_position=best_player.position,
+                salary=best_player.salary,
+                projected_points=best_player.projected_points or 0,
+            )
+            lineup_players.append(lineup_player)
+            used_player_ids.add(best_player.yahoo_player_id)
+            salary_remaining -= best_player.salary
+        else:
+            logger.warning(f"Could not find player for position {pos}, salary remaining: ${salary_remaining}")
+
+    if len(lineup_players) < len(locked_players) + len(positions_to_optimize):
+        logger.warning(f"Incomplete lineup: {len(lineup_players)} players")
+        return None
+
+    total_salary = sum(p.salary for p in lineup_players)
+    total_projected = sum(p.projected_points for p in lineup_players)
+
+    return Lineup(
+        series_id=0,  # Placeholder for edit lineups
+        players=lineup_players,
+        total_salary=total_salary,
+        projected_points=total_projected,
+        entry_id=entry_id,
+        contest_id=contest_id,
+    )
 
 
 def run_discovery_only(sport: str) -> list[dict]:

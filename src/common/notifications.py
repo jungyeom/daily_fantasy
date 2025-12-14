@@ -96,6 +96,14 @@ class EmailNotifier:
 
         except Exception as e:
             logger.error(f"Failed to send email via SendGrid: {e}")
+            # Provide clearer error message for authentication failures
+            error_str = str(e)
+            if "401" in error_str or "Unauthorized" in error_str:
+                raise EmailSendError(
+                    "SendGrid API key is invalid or expired. "
+                    "Please regenerate the API key at https://app.sendgrid.com/settings/api_keys "
+                    "and set it via DFS_SENDGRID_API_KEY environment variable."
+                ) from e
             raise EmailSendError(f"SendGrid error: {e}") from e
 
     def _send_via_smtp(self, subject: str, body_html: str, body_text: str) -> bool:
@@ -367,6 +375,45 @@ Best Finish: {best_finish} / {total_entries}
             <td style="padding: 8px; border: 1px solid #ddd;">{best_finish:,} / {total_entries:,}</td>
         </tr>
     </table>
+</body>
+</html>
+"""
+
+        return self._send_email(subject, body_html, body_text)
+
+    def notify_success(
+        self,
+        title: str,
+        message: str,
+    ) -> bool:
+        """Send notification for successful operations.
+
+        Args:
+            title: Notification title
+            message: Success message
+
+        Returns:
+            True if sent successfully
+        """
+        if not self.config.notify_on_submission:
+            return False
+
+        subject = f"{title}"
+
+        body_text = f"""
+{title}
+
+{message}
+
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+
+        body_html = f"""
+<html>
+<body style="font-family: Arial, sans-serif;">
+    <h2 style="color: #28a745;">{title}</h2>
+    <p>{message}</p>
+    <p style="color: #666; font-size: 12px;">Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
 </body>
 </html>
 """

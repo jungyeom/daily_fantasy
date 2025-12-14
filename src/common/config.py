@@ -173,9 +173,10 @@ class Config(BaseModel):
         env_mappings = {
             "DFS_YAHOO_USERNAME": ("yahoo", "username"),
             "DFS_YAHOO_PASSWORD": ("yahoo", "password"),
-            "DFS_EMAIL_USERNAME": ("email", "username"),
-            "DFS_EMAIL_PASSWORD": ("email", "password"),
-            "DFS_EMAIL_TO": ("email", "to_addresses"),
+            "DFS_SENDGRID_API_KEY": ("email", "sendgrid_api_key"),
+            "DFS_EMAIL_USERNAME": ("email", "smtp_username"),
+            "DFS_EMAIL_PASSWORD": ("email", "smtp_password"),
+            "DFS_EMAIL_TO": ("email", "to_address"),
             "DFS_LOG_LEVEL": ("log_level",),
         }
 
@@ -186,10 +187,6 @@ class Config(BaseModel):
                 current = config_data
                 for key in path[:-1]:
                     current = current.setdefault(key, {})
-
-                # Handle list values (comma-separated)
-                if env_var == "DFS_EMAIL_TO":
-                    value = [v.strip() for v in value.split(",")]
 
                 current[path[-1]] = value
                 logger.debug(f"Config override from {env_var}")

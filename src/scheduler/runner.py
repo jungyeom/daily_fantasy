@@ -11,17 +11,16 @@ from apscheduler.triggers.date import DateTrigger
 from ..common.config import get_config
 from ..common.database import get_database, ContestDB
 from ..common.models import Sport
-from ..common.auto_debug import handle_job_error
 from .job_functions import JobContext
 
 logger = logging.getLogger(__name__)
 
 
 def with_auto_debug(job_name: str):
-    """Decorator to wrap job methods with auto-debug error handling.
+    """Simple decorator to wrap job methods with error logging.
 
     Args:
-        job_name: Human-readable job name for error context
+        job_name: Human-readable job name for logging
     """
     def decorator(func):
         def wrapper(self, *args, **kwargs):
@@ -29,14 +28,6 @@ def with_auto_debug(job_name: str):
                 return func(self, *args, **kwargs)
             except Exception as e:
                 logger.error(f"Job {job_name} failed: {e}")
-                # Build job args dict from function signature
-                job_args = {"args": args, "kwargs": kwargs}
-                handle_job_error(
-                    error=e,
-                    job_name=job_name,
-                    job_args=job_args,
-                    additional_context={"function": func.__name__},
-                )
                 # Re-raise so APScheduler knows the job failed
                 raise
         return wrapper

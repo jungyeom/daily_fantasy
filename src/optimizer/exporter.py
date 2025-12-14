@@ -11,7 +11,7 @@ from ..common.models import Lineup, Sport
 logger = logging.getLogger(__name__)
 
 
-# Yahoo roster position order by sport
+# Yahoo roster position order by sport (multi-game classic format)
 YAHOO_POSITION_ORDER = {
     Sport.NFL: ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DEF"],
     Sport.NBA: ["PG", "SG", "G", "SF", "PF", "F", "C", "UTIL"],
@@ -19,6 +19,9 @@ YAHOO_POSITION_ORDER = {
     Sport.NHL: ["C", "C", "W", "W", "W", "D", "D", "G", "UTIL"],
     Sport.PGA: ["G", "G", "G", "G", "G", "G"],
 }
+
+# Single-game (showdown) roster position order
+YAHOO_SINGLE_GAME_POSITIONS = ["SUPERSTAR", "FLEX", "FLEX", "FLEX", "FLEX"]
 
 
 class LineupExporter:
@@ -65,60 +68,62 @@ class LineupExporter:
             filename = f"yahoo_upload_{contest_id}_{timestamp}.csv"
             filepath = self.output_dir / filename
 
-        # Get position order for sport
-        positions = YAHOO_POSITION_ORDER.get(self.sport, [])
-        if not positions:
-            # Use positions from first lineup
-            positions = [p.roster_position for p in lineups[0].players]
+        # Check if this is a single-game lineup (has SUPERSTAR position)
+        first_lineup_positions = [p.roster_position for p in lineups[0].players]
+        is_single_game = "SUPERSTAR" in first_lineup_positions
 
-        # Write CSV
+        # Get position order for sport
+        if is_single_game:
+            positions = YAHOO_SINGLE_GAME_POSITIONS
+        else:
+            positions = YAHOO_POSITION_ORDER.get(self.sport, [])
+            if not positions:
+                # Use positions from first lineup
+                positions = first_lineup_positions
+
+        # Write CSV using list-based approach to handle duplicate position names
         with open(filepath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=positions)
-            writer.writeheader()
+            writer = csv.writer(f)
+            writer.writerow(positions)  # Header
 
             for lineup in lineups:
-                row = self._lineup_to_row(lineup, positions)
+                row = self._lineup_to_row_list(lineup, positions)
                 writer.writerow(row)
 
         logger.info(f"Exported {len(lineups)} lineups to {filepath}")
         return filepath
 
-    def _lineup_to_row(self, lineup: Lineup, positions: list[str]) -> dict:
-        """Convert lineup to CSV row dict.
+    def _lineup_to_row_list(self, lineup: Lineup, positions: list[str]) -> list[str]:
+        """Convert lineup to CSV row list.
 
         Args:
             lineup: Lineup to convert
             positions: Position column order
 
         Returns:
-            Dict mapping position to player ID
+            List of player IDs matching position order
         """
-        row = {pos: "" for pos in positions}
+        # Initialize row with empty strings
+        row = [""] * len(positions)
 
-        # Track used positions for duplicates (e.g., RB, RB)
-        position_counts = {}
-
+        # Group players by position, maintaining order
+        players_by_pos = {}
         for player in lineup.players:
             pos = player.roster_position
-
-            # Handle duplicate positions
-            if pos in position_counts:
-                position_counts[pos] += 1
-            else:
-                position_counts[pos] = 0
-
-            # Use player_game_code for Yahoo upload (format: "nba.p.5073$nba.g.13586640")
-            # Falls back to yahoo_player_id if player_game_code is not available
+            if pos not in players_by_pos:
+                players_by_pos[pos] = []
             player_id = player.player_game_code or player.yahoo_player_id
+            players_by_pos[pos].append(player_id)
 
-            # Find correct column index
-            col_idx = 0
-            for i, col_pos in enumerate(positions):
-                if col_pos == pos:
-                    if col_idx == position_counts[pos]:
-                        row[positions[i]] = player_id
-                        break
-                    col_idx += 1
+        # Fill in the row by position
+        position_usage = {}
+        for i, pos in enumerate(positions):
+            if pos not in position_usage:
+                position_usage[pos] = 0
+
+            if pos in players_by_pos and position_usage[pos] < len(players_by_pos[pos]):
+                row[i] = players_by_pos[pos][position_usage[pos]]
+                position_usage[pos] += 1
 
         return row
 

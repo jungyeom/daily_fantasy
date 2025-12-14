@@ -104,9 +104,27 @@ def main():
         logger.error("Not enough players with projections")
         sys.exit(1)
 
+    # Check if this is a single-game contest
+    from src.common.database import get_database, ContestDB
+
+    db = get_database()
+    session = db.get_session()
+    try:
+        contest = session.query(ContestDB).filter_by(id=args.contest_id).first()
+        if contest:
+            single_game = contest.slate_type and contest.slate_type.upper() == "SINGLE_GAME"
+            salary_cap = contest.salary_cap if single_game else None
+            logger.info(f"Contest type: {'Single-Game' if single_game else 'Multi-Game'}, Salary cap: {salary_cap}")
+        else:
+            single_game = False
+            salary_cap = None
+            logger.warning(f"Contest {args.contest_id} not found in DB, assuming multi-game")
+    finally:
+        session.close()
+
     # Build lineups
     logger.info("Generating lineups...")
-    builder = LineupBuilder(sport)
+    builder = LineupBuilder(sport, single_game=single_game, salary_cap=salary_cap)
 
     if args.num_lineups:
         lineups = builder.build_lineups(players, args.num_lineups, args.contest_id)

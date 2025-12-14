@@ -144,6 +144,78 @@ class LineupSubmitter:
                 get_browser_manager().save_screenshot("submission_error", driver)
             raise YahooSubmissionError(f"Submission failed: {e}") from e
 
+    def submit_csv_file(
+        self,
+        driver: WebDriver,
+        csv_path: str | Path,
+        contest_id: str,
+        sport_name: str = "Unknown",
+        contest_name: str = "Unknown",
+    ) -> tuple[int, int]:
+        """Submit a pre-generated CSV file to a Yahoo contest.
+
+        Args:
+            driver: Authenticated Selenium WebDriver
+            csv_path: Path to the CSV file to upload
+            contest_id: Yahoo contest ID
+            sport_name: Sport name for notifications
+            contest_name: Contest name for notifications
+
+        Returns:
+            Tuple of (successful_count, failed_count)
+        """
+        csv_path = Path(csv_path)
+        if not csv_path.exists():
+            logger.error(f"CSV file not found: {csv_path}")
+            return 0, 0
+
+        # Count lineups in CSV (subtract 1 for header)
+        with open(csv_path, "r") as f:
+            num_lineups = sum(1 for line in f if line.strip()) - 1
+
+        if num_lineups <= 0:
+            logger.warning("CSV file is empty or has no lineups")
+            return 0, 0
+
+        logger.info(f"Submitting {num_lineups} lineups from CSV to contest {contest_id}...")
+
+        try:
+            # Navigate to contest setlineup page
+            setlineup_url = f"{YAHOO_DFS_BASE_URL}/contest/{contest_id}/setlineup"
+            driver.get(setlineup_url)
+            logger.info(f"Navigating to: {setlineup_url}")
+
+            wait = WebDriverWait(driver, 30)
+            time.sleep(2)
+
+            # Upload the CSV
+            success = self._upload_csv(driver, csv_path, wait)
+
+            if success:
+                submitted_count = self._verify_submission(driver, wait, num_lineups)
+
+                if submitted_count > 0:
+                    self.notifier.notify_lineups_submitted(
+                        sport=sport_name,
+                        contest_name=contest_name,
+                        num_lineups=submitted_count,
+                        total_projected=0,  # No projection info from CSV
+                    )
+
+                logger.info(f"Successfully submitted {submitted_count}/{num_lineups} lineups")
+                return submitted_count, num_lineups - submitted_count
+
+            else:
+                logger.error("CSV upload failed")
+                return 0, num_lineups
+
+        except Exception as e:
+            logger.error(f"CSV submission failed: {e}")
+            if self.config.yahoo.screenshot_on_error:
+                from .browser import get_browser_manager
+                get_browser_manager().save_screenshot("csv_submission_error", driver)
+            raise YahooSubmissionError(f"CSV submission failed: {e}") from e
+
     def _generate_upload_csv(
         self,
         lineups: list[Lineup],

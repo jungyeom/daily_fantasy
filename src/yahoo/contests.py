@@ -67,14 +67,21 @@ class ContestFetcher:
                     parsed = parse_api_contest(raw)
                     contest = Contest(
                         id=parsed["id"],
+                        series_id=parsed.get("series_id"),
                         sport=parsed["sport"],
                         name=parsed["name"],
                         entry_fee=parsed["entry_fee"],
                         max_entries=parsed["max_entries"],
                         total_entries=parsed["total_entries"],
+                        entry_limit=parsed.get("entry_limit"),
                         prize_pool=parsed["prize_pool"],
                         slate_start=parsed["slate_start"],
                         status=ContestStatus.UPCOMING,
+                        contest_type=parsed.get("contest_type"),
+                        slate_type=parsed.get("slate_type"),
+                        is_guaranteed=parsed.get("is_guaranteed", False),
+                        is_multi_entry=parsed.get("is_multi_entry", False),
+                        salary_cap=parsed.get("salary_cap", 200),
                     )
                     contests.append(contest)
                 except Exception as e:
@@ -229,6 +236,11 @@ class ContestFetcher:
                     existing.total_entries = contest.total_entries
                     existing.prize_pool = float(contest.prize_pool) if contest.prize_pool else None
                     existing.status = contest.status.value
+                    # Update slate info if available
+                    if contest.slate_type:
+                        existing.slate_type = contest.slate_type
+                    if contest.salary_cap:
+                        existing.salary_cap = contest.salary_cap
                 else:
                     # Insert new contest
                     db_contest = ContestDB(
@@ -242,6 +254,8 @@ class ContestFetcher:
                         slate_start=contest.slate_start,
                         slate_end=contest.slate_end,
                         status=contest.status.value,
+                        slate_type=contest.slate_type,
+                        salary_cap=contest.salary_cap,
                     )
                     session.add(db_contest)
 

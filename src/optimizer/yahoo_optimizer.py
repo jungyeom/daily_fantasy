@@ -526,12 +526,12 @@ class YahooSingleGameOptimizer:
         self._optimizer.load_players(pdfs_players)
         self._players_loaded = True
 
-        # For single-game contests, we only have 2 teams so don't enforce team diversity
-        # For multi-game slates, require at least 3 different teams
+        # For single-game contests, require players from at least 2 different teams
+        # (both teams in the matchup should be represented)
         available_teams = len(set(p.team for p in players if p.team))
-        if available_teams >= 3:
-            self._optimizer.set_total_teams(min_teams=3)
-        # If only 2 teams (single-game), skip team diversity constraint
+        if available_teams >= 2:
+            self._optimizer.set_total_teams(min_teams=2)
+        # For multi-game slates with 3+ teams, the regular optimizer handles diversity
 
         logger.info(
             f"Loaded {len(pdfs_players)} players into single-game optimizer "

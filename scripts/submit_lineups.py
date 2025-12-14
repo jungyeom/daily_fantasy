@@ -79,10 +79,70 @@ def main():
             logger.error(f"Contest {args.contest_id} not found in database")
             sys.exit(1)
         contest_name = contest.name
+        # Check if single-game contest
+        single_game = contest.slate_type and contest.slate_type.upper() == "SINGLE_GAME"
+        if single_game:
+            logger.info(f"Contest type: Single-Game (showdown)")
     finally:
         session.close()
 
-    # Get lineups to submit
+    # If CSV file is provided, use direct CSV submission
+    if args.csv:
+        from pathlib import Path
+        csv_path = Path(args.csv)
+        if not csv_path.exists():
+            logger.error(f"CSV file not found: {csv_path}")
+            sys.exit(1)
+
+        # Count lineups in CSV
+        with open(csv_path, "r") as f:
+            num_lineups = sum(1 for line in f if line.strip()) - 1
+
+        logger.info(f"Will submit {num_lineups} lineups from CSV: {csv_path}")
+
+        if args.dry_run:
+            print(f"\n{'='*60}")
+            print(f"DRY RUN - Would submit {num_lineups} lineups from CSV")
+            print(f"Contest: {contest_name} (ID: {args.contest_id})")
+            print(f"CSV: {csv_path}")
+            print(f"{'='*60}")
+            return
+
+        # Submit CSV file directly
+        logger.info("Initializing browser...")
+        browser = get_browser_manager()
+        driver = browser.create_driver()
+
+        try:
+            auth = YahooAuth()
+            auth.login(driver)
+
+            submitter = LineupSubmitter()
+            successful, failed = submitter.submit_csv_file(
+                driver=driver,
+                csv_path=csv_path,
+                contest_id=args.contest_id,
+                sport_name=sport.value,
+                contest_name=contest_name,
+            )
+
+            print(f"\n{'='*60}")
+            print(f"SUBMISSION COMPLETE")
+            print(f"{'='*60}")
+            print(f"Contest: {contest_name}")
+            print(f"Successful: {successful}")
+            print(f"Failed: {failed}")
+            print(f"{'='*60}")
+
+            if failed > 0:
+                logger.warning(f"{failed} lineups failed to submit")
+                sys.exit(1)
+        finally:
+            browser.close_driver()
+
+        return
+
+    # Get lineups to submit from database
     tracker = LineupTracker()
 
     if args.force:
@@ -144,6 +204,7 @@ def main():
             contest_id=args.contest_id,
             sport_name=sport.value,
             contest_name=contest_name,
+            single_game=single_game,
         )
 
         # Summary

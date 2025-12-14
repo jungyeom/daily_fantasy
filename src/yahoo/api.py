@@ -60,12 +60,15 @@ class YahooDFSApiClient:
     def get_contests(
         self,
         sport: Sport | str | None = None,
+        include_single_game: bool = True,
     ) -> list[dict]:
         """Fetch available contests from Yahoo DFS.
 
         Args:
             sport: Filter by sport - accepts Sport enum or string (e.g., "nfl").
                    None returns all sports.
+            include_single_game: If True, includes both SINGLE_GAME and MULTI_GAME slates.
+                                 If False, only fetches MULTI_GAME slates.
 
         Returns:
             List of contest dictionaries with raw API data
@@ -73,9 +76,6 @@ class YahooDFSApiClient:
         Raises:
             YahooAPIError: If API request fails
         """
-        # Use /contests endpoint instead of /contestsFilteredWeb
-        # /contests returns paid contests, /contestsFilteredWeb only returns free ones
-        # /contests returns both single-game and multi-game contests by default
         url = f"{self.base_url}/contests"
 
         # Build query string
@@ -90,6 +90,11 @@ class YahooDFSApiClient:
                 sport_code = sport.lower()
             if sport_code:
                 query_parts.append(f"sport={sport_code}")
+
+        # Include both slate types to get single-game (showdown) contests
+        if include_single_game:
+            query_parts.append("slateTypes=SINGLE_GAME")
+            query_parts.append("slateTypes=MULTI_GAME")
 
         full_url = url
         if query_parts:

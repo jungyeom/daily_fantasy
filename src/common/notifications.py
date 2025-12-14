@@ -289,7 +289,12 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 </html>
 """
 
-        return self._send_email(subject, body_html, body_text)
+        # Catch email send failures gracefully so notifications don't crash jobs
+        try:
+            return self._send_email(subject, body_html, body_text)
+        except EmailSendError as e:
+            logger.error(f"Failed to send late swap notification email: {e}")
+            return False
 
     def notify_contest_results(
         self,
@@ -384,7 +389,12 @@ Best Finish: {best_finish} / {total_entries}
 </html>
 """
 
-        return self._send_email(subject, body_html, body_text)
+        # Catch email send failures gracefully so notifications don't crash jobs
+        try:
+            return self._send_email(subject, body_html, body_text)
+        except EmailSendError as e:
+            logger.error(f"Failed to send contest results notification email: {e}")
+            return False
 
     def notify_success(
         self,

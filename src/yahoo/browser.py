@@ -20,16 +20,22 @@ logger = logging.getLogger(__name__)
 class BrowserManager:
     """Manages Selenium WebDriver lifecycle and common operations."""
 
-    def __init__(self, config: Optional[YahooConfig] = None):
+    # Default download directory for all browser instances
+    DEFAULT_DOWNLOAD_DIR = Path("data/downloads")
+
+    def __init__(self, config: Optional[YahooConfig] = None, download_dir: Optional[Path] = None):
         """Initialize browser manager.
 
         Args:
             config: Yahoo configuration. Uses global config if not provided.
+            download_dir: Directory for file downloads. Defaults to data/downloads.
         """
         if config is None:
             config = get_config().yahoo
         self.config = config
         self._driver: Optional[WebDriver] = None
+        self.download_dir = download_dir or self.DEFAULT_DOWNLOAD_DIR
+        self.download_dir.mkdir(parents=True, exist_ok=True)
 
     def create_driver(self) -> WebDriver:
         """Create and configure Chrome WebDriver.
@@ -55,6 +61,16 @@ class BrowserManager:
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
 
+        # Configure download directory (required for headless mode)
+        download_path = str(self.download_dir.resolve())
+        prefs = {
+            "download.default_directory": download_path,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,
+        }
+        options.add_experimental_option("prefs", prefs)
+
         # Set user agent if configured
         if self.config.user_agent:
             options.add_argument(f"--user-agent={self.config.user_agent}")
@@ -62,6 +78,13 @@ class BrowserManager:
         # Create driver with auto-managed ChromeDriver
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
+
+        # Enable headless downloads (required for Chrome headless mode)
+        if self.config.headless:
+            driver.execute_cdp_cmd("Page.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": download_path
+            })
 
         # Set page load timeout
         driver.set_page_load_timeout(self.config.timeout)
@@ -72,7 +95,7 @@ class BrowserManager:
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
 
-        logger.info(f"Chrome WebDriver created (headless={self.config.headless})")
+        logger.info(f"Chrome WebDriver created (headless={self.config.headless}, download_dir={download_path})")
         self._driver = driver
         return driver
 

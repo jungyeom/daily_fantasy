@@ -496,6 +496,7 @@ class LineupEditor:
         """Download the CSV template from Yahoo.
 
         The template contains all our existing entries with their entry_ids.
+        Uses requests library with browser cookies for reliable downloads.
 
         Args:
             driver: WebDriver on edit page after selecting slate
@@ -503,6 +504,8 @@ class LineupEditor:
         Returns:
             Path to downloaded CSV file, or None if failed
         """
+        import requests
+
         try:
             # Wait for download link to appear (it's dynamically rendered after slate selection)
             time.sleep(3)
@@ -511,36 +514,31 @@ class LineupEditor:
             for old_csv in self.download_dir.glob("*.csv"):
                 old_csv.unlink()
 
-            # Try multiple times with increasing waits
-            for attempt in range(3):
-                logger.info(f"Looking for download link (attempt {attempt + 1}/3)...")
+            # Find the download link URL
+            download_url = None
 
-                # PRIORITY 1: Look for the specific ".csv template" link text
-                # Yahoo's edit page has "Download a .csv template" link
-                specific_selectors = [
-                    "//a[contains(text(), '.csv template')]",
-                    "//a[contains(text(), 'csv template')]",
-                    "//a[contains(., '.csv template')]",
-                    "//a[contains(., 'Download a .csv')]",
-                ]
+            # PRIORITY 1: Look for the specific ".csv template" link text
+            specific_selectors = [
+                "//a[contains(text(), '.csv template')]",
+                "//a[contains(text(), 'csv template')]",
+                "//a[contains(., '.csv template')]",
+                "//a[contains(., 'Download a .csv')]",
+            ]
 
-                for selector in specific_selectors:
-                    try:
-                        from selenium.webdriver.common.by import By
-                        download_link = driver.find_element(By.XPATH, selector)
-                        if download_link and download_link.is_displayed():
-                            href = download_link.get_attribute("href") or ""
-                            logger.info(f"Found template link: '{download_link.text}' -> {href[:60]}")
-                            driver.execute_script("arguments[0].click();", download_link)
-                            time.sleep(2)
+            for selector in specific_selectors:
+                try:
+                    download_link = driver.find_element(By.XPATH, selector)
+                    if download_link and download_link.is_displayed():
+                        href = download_link.get_attribute("href") or ""
+                        if href and "export" in href.lower():
+                            download_url = href
+                            logger.info(f"Found template link: '{download_link.text}' -> {href[:80]}")
+                            break
+                except Exception:
+                    continue
 
-                            result = self._wait_for_download(timeout=30)
-                            if result:
-                                return result
-                    except Exception:
-                        continue
-
-                # PRIORITY 2: Look for links with export/template in href
+            # PRIORITY 2: Look for links with export/template in href
+            if not download_url:
                 links = driver.find_elements(By.TAG_NAME, "a")
                 for link in links:
                     try:
@@ -549,50 +547,72 @@ class LineupEditor:
 
                         # Look for template download links by href pattern
                         is_template_link = (
-                            "template" in href.lower() or
-                            "export" in href.lower() or
-                            ("csv" in text and "template" in text)
+                            "export" in href.lower() and
+                            ("batch" in href.lower() or "template" in href.lower())
                         )
 
                         # Skip navigation links
                         is_nav = "skip" in text or "app" in text.lower() or len(text) > 100
 
                         if is_template_link and not is_nav and link.is_displayed():
-                            logger.info(f"Found download link: '{text}' -> {href[:60]}")
-                            driver.execute_script("arguments[0].click();", link)
-                            time.sleep(2)
-
-                            result = self._wait_for_download(timeout=30)
-                            if result:
-                                return result
-                    except Exception as e:
-                        logger.debug(f"Error checking link: {e}")
-                        continue
-
-                # PRIORITY 3: Iterate all links looking for "csv" and "template" text
-                for link in links:
-                    try:
-                        text = link.text.lower() if link.text else ""
-                        if "csv" in text and "template" in text and link.is_displayed():
-                            logger.info(f"Found link by iteration: {text[:50]}")
-                            driver.execute_script("arguments[0].click();", link)
-                            time.sleep(2)
-
-                            result = self._wait_for_download(timeout=30)
-                            if result:
-                                return result
+                            download_url = href
+                            logger.info(f"Found download link: '{text}' -> {href[:80]}")
+                            break
                     except Exception:
                         continue
 
-                # Wait and try again
-                if attempt < 2:
-                    logger.info("Download link not found, waiting and retrying...")
-                    time.sleep(3)
+            if not download_url:
+                logger.error("Could not find download link URL")
+                self._save_debug_screenshot(driver, "editor_download_not_found")
+                self._save_page_source(driver, "editor_page")
+                return None
 
-            logger.error("Could not find download link for template after multiple attempts")
-            self._save_debug_screenshot(driver, "editor_download_not_found")
-            self._save_page_source(driver, "editor_page")
-            return None
+            # Get cookies from browser for authentication
+            cookies = driver.get_cookies()
+            session = requests.Session()
+            for cookie in cookies:
+                session.cookies.set(cookie['name'], cookie['value'], domain=cookie.get('domain', ''))
+
+            # Download the CSV using requests
+            logger.info(f"Downloading template via requests: {download_url[:80]}...")
+            headers = {
+                'User-Agent': driver.execute_script("return navigator.userAgent"),
+                'Accept': 'text/csv,application/csv,*/*',
+                'Referer': 'https://sports.yahoo.com/dailyfantasy/contest/csv/edit',
+            }
+
+            response = session.get(download_url, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                logger.error(f"Download failed with status {response.status_code}")
+                return None
+
+            # Check content type
+            content_type = response.headers.get('Content-Type', '')
+            if 'csv' not in content_type.lower() and 'text' not in content_type.lower():
+                logger.warning(f"Unexpected content type: {content_type}")
+                # Still try to save it - might be OK
+
+            # Save to file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"template_{timestamp}.csv"
+            filepath = self.download_dir / filename
+
+            with open(filepath, 'wb') as f:
+                f.write(response.content)
+
+            # Verify it's a valid CSV
+            file_size = filepath.stat().st_size
+            logger.info(f"Downloaded template: {filepath} ({file_size} bytes)")
+
+            if file_size < 100:
+                logger.warning(f"Downloaded file seems too small ({file_size} bytes)")
+                # Read and log content for debugging
+                with open(filepath, 'r') as f:
+                    content = f.read()[:500]
+                    logger.debug(f"File content preview: {content}")
+
+            return filepath
 
         except Exception as e:
             logger.error(f"Failed to download template: {e}")
@@ -625,6 +645,24 @@ class LineupEditor:
         logger.error("Timeout waiting for template download")
         return None
 
+    # Valid roster position columns in Yahoo templates
+    ROSTER_POSITIONS = {
+        # Multi-game roster positions
+        "QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DEF",
+        # Single-game roster positions
+        "SUPERSTAR", "STAR", "PRO", "UTIL1", "UTIL2",
+        # Additional positions
+        "K", "DST", "G1", "G2", "F1", "F2", "F3", "C", "PG", "SG", "SF", "PF",
+    }
+
+    # Columns that are NOT roster positions (metadata columns after roster)
+    NON_ROSTER_COLUMNS = {
+        "Contest Title", "Entry Fee", "Prizes", "Contest ID", "Entry ID",
+        " ", "Instructions", "ID", "First Name", "Last Name", "ID + Name",
+        "Position", "Team", "Opponent", "Game", "Time", "Salary", "FPPG",
+        "Injury Status", "Starting",
+    }
+
     def _parse_template(self, template_path: Path) -> list[dict]:
         """Parse the downloaded template CSV to extract entry data.
 
@@ -647,6 +685,26 @@ class LineupEditor:
 
                 logger.info(f"Template headers: {headers}")
 
+                # Identify roster position columns (stop at first non-roster column after Entry ID)
+                roster_positions = []
+                started_roster = False
+                for header in headers:
+                    if header == "Entry ID":
+                        started_roster = True
+                        continue
+                    if started_roster:
+                        # Check if this is a valid roster position
+                        if header in self.ROSTER_POSITIONS:
+                            roster_positions.append(header)
+                        elif header in self.NON_ROSTER_COLUMNS or header.strip() == "":
+                            # Stop at first non-roster column
+                            break
+                        elif header not in self.NON_ROSTER_COLUMNS:
+                            # Unknown column - assume roster position if before metadata
+                            roster_positions.append(header)
+
+                logger.info(f"Roster positions: {roster_positions}")
+
                 for row in reader:
                     entry = {
                         "contest_title": row.get("Contest Title", ""),
@@ -657,10 +715,9 @@ class LineupEditor:
                         "players": {},
                     }
 
-                    # Extract player codes for each roster position
-                    for header in headers:
-                        if header not in ["Contest Title", "Entry Fee", "Prizes", "Contest ID", "Entry ID"]:
-                            entry["players"][header] = row.get(header, "")
+                    # Extract player codes only for roster positions
+                    for pos in roster_positions:
+                        entry["players"][pos] = row.get(pos, "")
 
                     if entry["entry_id"]:
                         entries.append(entry)
@@ -751,6 +808,93 @@ class LineupEditor:
 
         return matched
 
+    # Mapping from optimizer positions to template positions
+    # The optimizer uses positions like "RB" but templates use "RB1", "RB2"
+    POSITION_MAPPING = {
+        "QB": ["QB"],
+        "RB": ["RB1", "RB2"],
+        "WR": ["WR1", "WR2", "WR3"],
+        "TE": ["TE"],
+        "FLEX": ["FLEX"],
+        "DEF": ["DEF"],
+        "K": ["K"],
+        # Single game
+        "SUPERSTAR": ["SUPERSTAR"],
+        "STAR": ["STAR"],
+        "PRO": ["PRO"],
+        # NBA
+        "PG": ["PG"],
+        "SG": ["SG"],
+        "G": ["G"],
+        "SF": ["SF"],
+        "PF": ["PF"],
+        "F": ["F"],
+        "C": ["C"],
+        "UTIL": ["UTIL", "UTIL1", "UTIL2"],
+    }
+
+    def _map_players_to_template_positions(
+        self,
+        lineup_players: list,
+        template_positions: list[str],
+    ) -> dict[str, str]:
+        """Map lineup players to template roster positions.
+
+        Handles the mapping from optimizer positions (e.g., "RB", "WR") to
+        template positions (e.g., "RB1", "RB2", "WR1", "WR2", "WR3").
+
+        Args:
+            lineup_players: List of LineupPlayer objects
+            template_positions: List of positions from template (e.g., ["QB", "RB1", "RB2", ...])
+
+        Returns:
+            Dict mapping template position to player game code
+        """
+        result = {}
+        used_players = set()  # Track used player IDs to avoid duplicates
+
+        # Group players by their base position (from optimizer)
+        players_by_position = {}
+        for player in lineup_players:
+            pos = player.roster_position
+            if pos not in players_by_position:
+                players_by_position[pos] = []
+            players_by_position[pos].append(player)
+
+        # Now assign players to template positions
+        for template_pos in template_positions:
+            # Find which optimizer position maps to this template position
+            base_pos = None
+            for opt_pos, template_list in self.POSITION_MAPPING.items():
+                if template_pos in template_list:
+                    base_pos = opt_pos
+                    break
+
+            # If no mapping found, try direct match (template_pos might be same as optimizer)
+            if base_pos is None:
+                # Try stripping numbers (RB1 -> RB)
+                base_pos = re.sub(r'\d+$', '', template_pos)
+
+            # Get available players for this position
+            available = players_by_position.get(base_pos, [])
+
+            # Find an unused player
+            assigned = False
+            for player in available:
+                player_key = player.yahoo_player_id or player.name
+                if player_key not in used_players:
+                    code = player.player_game_code or player.yahoo_player_id
+                    result[template_pos] = code
+                    used_players.add(player_key)
+                    assigned = True
+                    break
+
+            if not assigned:
+                # No player available for this position
+                result[template_pos] = ""
+
+        return result
+
     def _generate_edit_csv(
         self,
         template_entries: list[dict],
@@ -804,15 +948,14 @@ class LineupEditor:
                             entry_id,
                         ]
 
-                        # Build player codes by roster position
-                        player_by_position = {
-                            p.roster_position: p for p in lineup.players
-                        }
+                        # Map players to template positions (handles RB->RB1/RB2, WR->WR1/WR2/WR3, etc.)
+                        position_to_code = self._map_players_to_template_positions(
+                            lineup.players, roster_positions
+                        )
 
                         for pos in roster_positions:
-                            player = player_by_position.get(pos)
-                            if player:
-                                code = player.player_game_code or player.yahoo_player_id
+                            code = position_to_code.get(pos, "")
+                            if code:
                                 row.append(code)
                             else:
                                 # Keep original if we don't have this position
@@ -1077,6 +1220,381 @@ class LineupEditor:
             logger.info(f"Saved page source: {path}")
         except Exception as e:
             logger.warning(f"Could not save page source: {e}")
+
+    def _get_all_slate_elements(self, driver: WebDriver) -> list:
+        """Find all slate option elements on the page.
+
+        Args:
+            driver: WebDriver on edit page after selecting sport
+
+        Returns:
+            List of WebElements representing slate options
+        """
+        slate_elements = []
+
+        # First try: look for anchor tags with slate info (most reliable)
+        all_anchors = driver.find_elements(By.TAG_NAME, "a")
+        for anchor in all_anchors:
+            try:
+                text = anchor.text.strip()
+                # Look for slate patterns: "X NBA Games", "X NFL Games", time patterns
+                if text and re.search(r'\d+\s+(NFL|NBA|MLB|NHL)\s+Games?', text, re.I):
+                    # Check if it's visible and likely a slate (not nav)
+                    if anchor.is_displayed() and "skip" not in text.lower():
+                        slate_elements.append(anchor)
+                        logger.debug(f"Found slate anchor: {text[:60]}")
+            except Exception:
+                continue
+
+        # Second try: look for elements in ys-pillChoose (Yahoo's pill chooser component)
+        if not slate_elements:
+            try:
+                pill_container = driver.find_element(By.CSS_SELECTOR, ".ys-pillChoose")
+                anchors_in_pill = pill_container.find_elements(By.TAG_NAME, "a")
+                for anchor in anchors_in_pill:
+                    if anchor.is_displayed():
+                        slate_elements.append(anchor)
+            except Exception:
+                pass
+
+        # Third try: data attributes
+        if not slate_elements:
+            slate_selectors = [
+                "[data-tst*='slate']",
+                "[data-tst*='game-slate']",
+                ".slate-option",
+                ".game-slate",
+            ]
+            for selector in slate_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    slate_elements.extend(elements)
+                except Exception:
+                    continue
+
+        return slate_elements
+
+    def discover_all_slates(
+        self,
+        driver: WebDriver,
+        sport: str = "nfl",
+    ) -> list[dict]:
+        """Discover all slates with entries for a sport.
+
+        Navigates to edit page, selects sport, then iterates through each
+        slate option to download template and check for entries.
+
+        Args:
+            driver: Authenticated Selenium WebDriver
+            sport: Sport code (nfl, nba, etc.)
+
+        Returns:
+            List of dicts with slate info:
+            [
+                {
+                    "slate_text": "Sun 1:00 PM - 10 NFL Games",
+                    "entries": [...],  # Parsed entries from template
+                    "template_path": Path,
+                    "contest_ids": set(),  # Unique contest IDs in this slate
+                }
+            ]
+        """
+        slates_with_entries = []
+
+        try:
+            # Navigate to edit page
+            logger.info(f"Navigating to edit page: {YAHOO_EDIT_URL}")
+            driver.get(YAHOO_EDIT_URL)
+            time.sleep(3)
+
+            # Select Edit action
+            if not self._select_edit_action(driver):
+                logger.error("Failed to select Edit action")
+                return []
+
+            # Select sport
+            if not self._select_sport(driver, sport):
+                logger.error(f"Failed to select sport: {sport}")
+                return []
+
+            time.sleep(2)
+
+            # Get all slate elements
+            slate_elements = self._get_all_slate_elements(driver)
+
+            if not slate_elements:
+                logger.warning("No slate elements found")
+                self._save_debug_screenshot(driver, "no_slates_found")
+                return []
+
+            logger.info(f"Found {len(slate_elements)} slate options to check")
+
+            # Store slate texts for re-finding elements after page changes
+            slate_texts = []
+            for elem in slate_elements:
+                try:
+                    text = elem.text.strip()
+                    if text:
+                        slate_texts.append(text)
+                except Exception:
+                    continue
+
+            logger.info(f"Slate options: {slate_texts}")
+
+            # Iterate through each slate
+            for i, slate_text in enumerate(slate_texts):
+                logger.info(f"\n--- Processing slate {i+1}/{len(slate_texts)}: {slate_text[:50]} ---")
+
+                try:
+                    # Re-navigate to edit page (fresh state for each slate)
+                    driver.get(YAHOO_EDIT_URL)
+                    time.sleep(2)
+
+                    # Re-select Edit action
+                    if not self._select_edit_action(driver):
+                        logger.warning(f"Failed to select Edit for slate {i+1}")
+                        continue
+
+                    # Re-select sport
+                    if not self._select_sport(driver, sport):
+                        logger.warning(f"Failed to select sport for slate {i+1}")
+                        continue
+
+                    time.sleep(2)
+
+                    # Find and click this specific slate
+                    current_slate_elements = self._get_all_slate_elements(driver)
+                    clicked = False
+
+                    for elem in current_slate_elements:
+                        try:
+                            if elem.text.strip() == slate_text and elem.is_displayed():
+                                driver.execute_script("arguments[0].click();", elem)
+                                logger.info(f"Clicked slate: {slate_text[:50]}")
+                                clicked = True
+                                time.sleep(3)
+                                break
+                        except Exception:
+                            continue
+
+                    if not clicked:
+                        logger.warning(f"Could not click slate: {slate_text[:50]}")
+                        continue
+
+                    # Download template for this slate
+                    template_path = self._download_template(driver)
+
+                    if not template_path:
+                        logger.info(f"No template available for slate: {slate_text[:50]}")
+                        continue
+
+                    # Parse template to check for entries
+                    entries = self._parse_template(template_path)
+
+                    if not entries:
+                        logger.info(f"No entries found in template for slate: {slate_text[:50]}")
+                        continue
+
+                    # Extract unique contest IDs
+                    contest_ids = set()
+                    for entry in entries:
+                        cid = entry.get("contest_id")
+                        if cid:
+                            contest_ids.add(str(cid))
+
+                    logger.info(f"Found {len(entries)} entries across {len(contest_ids)} contests in slate: {slate_text[:50]}")
+
+                    slates_with_entries.append({
+                        "slate_text": slate_text,
+                        "entries": entries,
+                        "template_path": template_path,
+                        "contest_ids": contest_ids,
+                    })
+
+                except Exception as e:
+                    logger.error(f"Error processing slate {slate_text[:50]}: {e}")
+                    continue
+
+            logger.info(f"\nDiscovered {len(slates_with_entries)} slates with entries")
+            return slates_with_entries
+
+        except Exception as e:
+            logger.error(f"Failed to discover slates: {e}")
+            self._save_debug_screenshot(driver, "discover_slates_error")
+            return []
+
+    def edit_all_slates(
+        self,
+        driver: WebDriver,
+        sport: str,
+        lineup_generator,
+    ) -> dict:
+        """Edit lineups for all slates that have entries.
+
+        This is the main entry point for editing all slates at once.
+
+        Args:
+            driver: Authenticated Selenium WebDriver
+            sport: Sport code (nfl, nba, etc.)
+            lineup_generator: Callable that takes (entries, sport) and returns
+                             list of Lineup objects with updated players.
+                             Signature: (entries: list[dict], sport: str) -> list[Lineup]
+
+        Returns:
+            Dict with overall results:
+            {
+                "success": bool,
+                "slates_processed": int,
+                "slates_with_entries": int,
+                "total_entries_edited": int,
+                "slate_results": [...]
+            }
+        """
+        results = {
+            "success": True,
+            "slates_processed": 0,
+            "slates_with_entries": 0,
+            "total_entries_edited": 0,
+            "slate_results": [],
+        }
+
+        # Discover all slates with entries
+        slates = self.discover_all_slates(driver, sport)
+
+        if not slates:
+            logger.warning("No slates with entries found")
+            results["success"] = False
+            results["message"] = "No slates with entries found"
+            return results
+
+        results["slates_with_entries"] = len(slates)
+
+        # Process each slate
+        for slate in slates:
+            slate_text = slate["slate_text"]
+            entries = slate["entries"]
+            template_path = slate["template_path"]
+
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Processing slate: {slate_text}")
+            logger.info(f"Entries: {len(entries)}")
+            logger.info(f"{'='*60}")
+
+            try:
+                # Generate optimized lineups using the provided generator
+                lineups = lineup_generator(entries, sport)
+
+                if not lineups:
+                    logger.warning(f"No lineups generated for slate: {slate_text[:50]}")
+                    results["slate_results"].append({
+                        "slate": slate_text,
+                        "success": False,
+                        "message": "No lineups generated",
+                        "entries_edited": 0,
+                    })
+                    continue
+
+                logger.info(f"Generated {len(lineups)} optimized lineups")
+
+                # Navigate back to edit page for this slate
+                driver.get(YAHOO_EDIT_URL)
+                time.sleep(2)
+
+                if not self._select_edit_action(driver):
+                    raise Exception("Failed to select Edit action")
+
+                if not self._select_sport(driver, sport):
+                    raise Exception(f"Failed to select sport: {sport}")
+
+                time.sleep(2)
+
+                # Click the specific slate
+                current_slate_elements = self._get_all_slate_elements(driver)
+                clicked = False
+
+                for elem in current_slate_elements:
+                    try:
+                        if elem.text.strip() == slate_text and elem.is_displayed():
+                            driver.execute_script("arguments[0].click();", elem)
+                            clicked = True
+                            time.sleep(3)
+                            break
+                    except Exception:
+                        continue
+
+                if not clicked:
+                    raise Exception(f"Could not click slate: {slate_text}")
+
+                # Match entries to lineups
+                # For multi-contest slates, we need to handle each contest
+                matched_lineups = self._match_entries_to_lineups(
+                    entries, lineups, contest_id=None  # Match across all contests
+                )
+
+                if not matched_lineups:
+                    logger.warning(f"Could not match any entries to lineups for slate: {slate_text[:50]}")
+                    results["slate_results"].append({
+                        "slate": slate_text,
+                        "success": False,
+                        "message": "Could not match entries to lineups",
+                        "entries_edited": 0,
+                    })
+                    continue
+
+                logger.info(f"Matched {len(matched_lineups)} lineups with entry_ids")
+
+                # Generate edit CSV
+                edit_csv_path = self._generate_edit_csv(
+                    template_entries=entries,
+                    lineups=matched_lineups,
+                    contest_id="multi",  # Indicates multi-contest slate
+                )
+
+                if not edit_csv_path:
+                    raise Exception("Failed to generate edit CSV")
+
+                # Upload the edit CSV
+                success = self._upload_edit_csv(driver, edit_csv_path)
+
+                if success:
+                    results["total_entries_edited"] += len(matched_lineups)
+                    results["slate_results"].append({
+                        "slate": slate_text,
+                        "success": True,
+                        "entries_edited": len(matched_lineups),
+                        "csv_path": str(edit_csv_path),
+                    })
+                    logger.info(f"Successfully edited {len(matched_lineups)} entries for slate: {slate_text[:50]}")
+                else:
+                    results["slate_results"].append({
+                        "slate": slate_text,
+                        "success": False,
+                        "message": "CSV upload failed",
+                        "entries_edited": 0,
+                    })
+
+                results["slates_processed"] += 1
+
+            except Exception as e:
+                logger.error(f"Error processing slate {slate_text[:50]}: {e}")
+                results["slate_results"].append({
+                    "slate": slate_text,
+                    "success": False,
+                    "message": str(e),
+                    "entries_edited": 0,
+                })
+
+        # Overall success if at least one slate was edited
+        results["success"] = results["total_entries_edited"] > 0
+
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Edit Summary:")
+        logger.info(f"  Slates with entries: {results['slates_with_entries']}")
+        logger.info(f"  Slates processed: {results['slates_processed']}")
+        logger.info(f"  Total entries edited: {results['total_entries_edited']}")
+        logger.info(f"{'='*60}")
+
+        return results
 
 
 # Convenience function

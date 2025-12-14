@@ -2,26 +2,32 @@
 """Script to regenerate and edit contest lineups with updated projections.
 
 This script:
-1. Fetches the player pool for a contest
-2. Applies updated projections (with INJ filter)
-3. Generates new optimized lineups
-4. Uses LineupEditor to update existing entries via Yahoo's CSV edit endpoint
+1. Logs into Yahoo and navigates to the CSV edit page
+2. Discovers all slates with entries for the specified sport
+3. For each slate with entries:
+   a. Downloads the template to get current entries
+   b. Fetches updated projections from DailyFantasyFuel
+   c. Checks injury status from Yahoo API
+   d. Re-optimizes lineups
+   e. Generates and uploads the edit CSV
 
 Usage:
-    python scripts/edit_contest_lineups.py           # Generate only (no browser)
-    python scripts/edit_contest_lineups.py --edit   # Generate and edit via browser
+    python scripts/edit_contest_lineups.py --sport nfl           # Dry run (no upload)
+    python scripts/edit_contest_lineups.py --sport nfl --edit   # Actually edit lineups
+    python scripts/edit_contest_lineups.py --sport nba --edit   # Edit NBA lineups
 """
 
 import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.common.models import Sport, Player
-from src.yahoo.api import YahooDFSApiClient, parse_api_player, parse_api_contest
+from src.common.models import Sport, Player, Lineup, LineupPlayer, LineupStatus
+from src.yahoo.api import YahooDFSApiClient, parse_api_player
 from src.projections.aggregator import ProjectionAggregator
 from src.optimizer.builder import LineupBuilder
 from src.yahoo.editor import LineupEditor
@@ -35,40 +41,96 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def fetch_players_for_contest(api: YahooDFSApiClient, contest_id: str) -> list[Player]:
-    """Fetch and parse player pool for a contest, excluding INJ players."""
-    raw_players = api.get_contest_players(contest_id)
+# Map sport strings to Sport enum
+SPORT_MAP = {
+    "nfl": Sport.NFL,
+    "nba": Sport.NBA,
+    "mlb": Sport.MLB,
+    "nhl": Sport.NHL,
+}
 
-    players = []
-    injured_count = 0
 
-    for raw in raw_players:
-        parsed = parse_api_player(raw, contest_id)
+def get_player_pool_for_slate(entries: list[dict], sport: Sport) -> list[Player]:
+    """Fetch player pool for a slate based on entries.
 
-        # Skip players with INJ status
-        status = parsed.get("status", "")
-        if status == "INJ":
-            injured_count += 1
-            logger.debug(f"Skipping INJ player: {parsed['name']}")
-            continue
+    Uses the contest_id from entries to fetch the player pool from Yahoo API.
 
-        player = Player(
-            yahoo_player_id=parsed["yahoo_player_id"],
-            player_game_code=parsed.get("player_game_code"),
-            name=parsed["name"],
-            team=parsed["team"],
-            position=parsed["position"],
-            salary=parsed["salary"],
-            status=status,
-        )
-        players.append(player)
+    Args:
+        entries: List of entry dicts from template (contains contest_id)
+        sport: Sport enum
 
-    logger.info(f"Loaded {len(players)} players (excluded {injured_count} INJ players)")
-    return players
+    Returns:
+        List of Player objects
+    """
+    if not entries:
+        return []
+
+    # Get a contest_id from entries
+    contest_id = None
+    for entry in entries:
+        cid = entry.get("contest_id")
+        if cid:
+            contest_id = str(cid)
+            break
+
+    if not contest_id:
+        logger.error("No contest_id found in entries")
+        return []
+
+    logger.info(f"Fetching player pool for contest {contest_id}")
+
+    api = YahooDFSApiClient()
+
+    try:
+        raw_players = api.get_contest_players(contest_id)
+
+        players = []
+        injured_count = 0
+
+        for raw in raw_players:
+            parsed = parse_api_player(raw, contest_id)
+
+            # Get injury status
+            status = parsed.get("status", "")
+
+            # Skip players with INJ or O status (but keep GTD/Q)
+            if status in ("INJ", "O"):
+                injured_count += 1
+                logger.debug(f"Skipping injured player: {parsed['name']} ({status})")
+                continue
+
+            player = Player(
+                yahoo_player_id=parsed["yahoo_player_id"],
+                player_game_code=parsed.get("player_game_code"),
+                name=parsed["name"],
+                team=parsed["team"],
+                position=parsed["position"],
+                salary=parsed["salary"],
+                injury_status=status if status else None,
+            )
+            players.append(player)
+
+        logger.info(f"Loaded {len(players)} players (excluded {injured_count} injured/out players)")
+        return players
+
+    except Exception as e:
+        logger.error(f"Failed to fetch player pool: {e}")
+        return []
 
 
 def apply_projections(players: list[Player], sport: Sport) -> list[Player]:
-    """Apply external projections to players using the aggregator."""
+    """Apply external projections to players using the aggregator.
+
+    Args:
+        players: List of Player objects
+        sport: Sport enum
+
+    Returns:
+        Players with projections merged
+    """
+    if not players:
+        return []
+
     aggregator = ProjectionAggregator()
 
     # get_projections_for_contest fetches, aggregates, and merges projections
@@ -78,75 +140,120 @@ def apply_projections(players: list[Player], sport: Sport) -> list[Player]:
     matched = sum(1 for p in players_with_projections if p.projected_points and p.projected_points > 0)
     logger.info(f"Matched {matched}/{len(players_with_projections)} players with projections")
 
+    # Log top players by projection
+    top_players = sorted(
+        [p for p in players_with_projections if p.projected_points],
+        key=lambda p: p.projected_points or 0,
+        reverse=True
+    )[:10]
+
+    if top_players:
+        logger.info("Top 10 players by projection:")
+        for p in top_players:
+            injury = f" [{p.injury_status}]" if p.injury_status else ""
+            logger.info(f"  {p.name} ({p.position}) - {p.projected_points:.1f} pts, ${p.salary}{injury}")
+
     return players_with_projections
 
 
-def generate_lineups_for_contest(
-    contest_id: str,
-    sport: Sport,
-    single_game: bool,
-    salary_cap: int,
-    num_lineups: int,
-):
-    """Generate new lineups for a contest with updated projections."""
-    api = YahooDFSApiClient()
+def generate_lineups_for_entries(
+    entries: list[dict],
+    sport_str: str,
+) -> list[Lineup]:
+    """Generate optimized lineups for a set of entries.
 
-    # Fetch players
-    players = fetch_players_for_contest(api, contest_id)
+    This is the lineup generator function passed to edit_all_slates().
+
+    Args:
+        entries: List of entry dicts from template
+        sport_str: Sport string (nfl, nba, etc.)
+
+    Returns:
+        List of Lineup objects with optimized players
+    """
+    sport = SPORT_MAP.get(sport_str.lower())
+    if not sport:
+        logger.error(f"Unknown sport: {sport_str}")
+        return []
+
+    num_lineups = len(entries)
+    logger.info(f"Generating {num_lineups} optimized lineups for {sport.value}")
+
+    # Get a contest_id for the player pool
+    contest_id = None
+    for entry in entries:
+        cid = entry.get("contest_id")
+        if cid:
+            contest_id = str(cid)
+            break
+
+    if not contest_id:
+        logger.error("No contest_id found in entries")
+        return []
+
+    # Fetch player pool
+    players = get_player_pool_for_slate(entries, sport)
 
     if not players:
-        logger.error(f"No players found for contest {contest_id}")
+        logger.error("No players found for slate")
         return []
 
     # Apply projections
     players = apply_projections(players, sport)
 
-    # Log some player projections for verification
+    # Check if we have enough players with projections
     players_with_proj = [p for p in players if p.projected_points and p.projected_points > 0]
-    logger.info(f"Players with valid projections: {len(players_with_proj)}")
+    if len(players_with_proj) < 8:
+        logger.error(f"Not enough players with projections: {len(players_with_proj)}")
+        return []
 
-    # Show top 10 by projection
-    top_players = sorted(players_with_proj, key=lambda p: p.projected_points or 0, reverse=True)[:10]
-    logger.info("Top 10 players by projection:")
-    for p in top_players:
-        logger.info(f"  {p.name} ({p.position}) - {p.projected_points:.1f} pts, ${p.salary}")
+    # Determine if single-game or multi-game
+    # Check roster positions in entries to determine format
+    if entries:
+        roster_positions = list(entries[0].get("players", {}).keys())
+        is_single_game = "SUPERSTAR" in roster_positions or len(roster_positions) <= 5
+    else:
+        is_single_game = False
 
     # Build lineups
-    builder = LineupBuilder(sport, single_game=single_game, salary_cap=salary_cap)
-    lineups = builder.build_lineups(
-        players=players,
-        num_lineups=num_lineups,
-        contest_id=contest_id,
-        save_to_db=False,  # Don't save yet
-    )
+    try:
+        builder = LineupBuilder(
+            sport=sport,
+            single_game=is_single_game,
+            salary_cap=200,  # Yahoo uses $200 cap
+        )
 
-    logger.info(f"Generated {len(lineups)} lineups")
+        lineups = builder.build_lineups(
+            players=players,
+            num_lineups=num_lineups,
+            contest_id=contest_id,
+            save_to_db=False,  # Don't save to DB during edit
+        )
 
-    # Show first lineup
-    if lineups:
-        lineup = lineups[0]
-        logger.info(f"Sample lineup - Projected: {lineup.projected_points:.1f} pts, Salary: ${lineup.total_salary}")
-        for p in lineup.players:
-            logger.info(f"  {p.roster_position:10} {p.name:25} ${p.salary:5} {p.projected_points:.1f}")
+        logger.info(f"Generated {len(lineups)} lineups")
 
-    return lineups
+        # Log sample lineup
+        if lineups:
+            lineup = lineups[0]
+            logger.info(f"Sample lineup - Projected: {lineup.projected_points:.1f} pts, Salary: ${lineup.total_salary}")
+            for p in lineup.players:
+                logger.info(f"  {p.roster_position:10} {p.name:25} ${p.salary:5} {p.projected_points:.1f}")
+
+        return lineups
+
+    except Exception as e:
+        logger.error(f"Lineup generation failed: {e}")
+        return []
 
 
-def edit_lineups_with_browser(
-    contest_id: str,
-    lineups: list,
-    sport: str = "nba",
-    contest_start_time=None,
-    contest_title: str = None,
-):
-    """Edit lineups using browser automation.
+def run_discovery_only(sport: str) -> list[dict]:
+    """Run discovery to find all slates with entries (no editing).
 
     Args:
-        contest_id: Yahoo contest ID
-        lineups: List of Lineup objects to submit as edits
-        sport: Sport code for editor
-        contest_start_time: Contest start time for slate matching
-        contest_title: Contest title
+        sport: Sport code
+
+    Returns:
+        List of slate info dicts
     """
     browser_manager = BrowserManager()
     auth = YahooAuth()
@@ -160,147 +267,133 @@ def edit_lineups_with_browser(
         logger.info("Authenticating with Yahoo...")
         auth.login(driver)
 
-        # Edit lineups
-        logger.info(f"Editing {len(lineups)} lineups for contest {contest_id}...")
-        result = editor.edit_lineups_for_contest(
-            driver=driver,
-            contest_id=contest_id,
-            lineups=lineups,
-            sport=sport,
-            contest_start_time=contest_start_time,
-            contest_title=contest_title,
-        )
+        # Discover slates
+        logger.info(f"Discovering {sport.upper()} slates with entries...")
+        slates = editor.discover_all_slates(driver, sport)
 
-        if result["success"]:
-            logger.info(f"Successfully edited {result['edited_count']} lineups!")
+        if slates:
+            logger.info(f"\nFound {len(slates)} slates with entries:")
+            for i, slate in enumerate(slates, 1):
+                logger.info(f"\n  Slate {i}: {slate['slate_text']}")
+                logger.info(f"    Entries: {len(slate['entries'])}")
+                logger.info(f"    Contests: {slate['contest_ids']}")
         else:
-            logger.error(f"Edit failed: {result['message']}")
+            logger.info("No slates with entries found")
 
-        return result
+        return slates
 
     except Exception as e:
-        logger.error(f"Browser editing failed: {e}")
-        return {"success": False, "message": str(e), "edited_count": 0}
+        logger.error(f"Discovery failed: {e}")
+        return []
+    finally:
+        browser_manager.close_driver()
+
+
+def run_edit_all_slates(sport: str) -> dict:
+    """Run full edit flow for all slates.
+
+    Args:
+        sport: Sport code
+
+    Returns:
+        Results dict
+    """
+    browser_manager = BrowserManager()
+    auth = YahooAuth()
+    editor = LineupEditor()
+
+    try:
+        # Create browser
+        driver = browser_manager.create_driver()
+
+        # Authenticate
+        logger.info("Authenticating with Yahoo...")
+        auth.login(driver)
+
+        # Run edit for all slates
+        logger.info(f"Editing all {sport.upper()} slates with entries...")
+
+        results = editor.edit_all_slates(
+            driver=driver,
+            sport=sport,
+            lineup_generator=generate_lineups_for_entries,
+        )
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Edit failed: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "slates_processed": 0,
+            "total_entries_edited": 0,
+        }
     finally:
         browser_manager.close_driver()
 
 
 def main():
-    """Main function to regenerate and edit lineups."""
-    parser = argparse.ArgumentParser(description="Edit Yahoo DFS lineups with updated projections")
-    parser.add_argument("--edit", action="store_true", help="Actually edit lineups via browser")
-    parser.add_argument("--contest", type=str, help="Specific contest ID to edit")
+    """Main function to discover and edit lineups."""
+    parser = argparse.ArgumentParser(
+        description="Edit Yahoo DFS lineups with updated projections"
+    )
+    parser.add_argument(
+        "--sport",
+        type=str,
+        default="nfl",
+        choices=["nfl", "nba", "mlb", "nhl"],
+        help="Sport to edit lineups for (default: nfl)"
+    )
+    parser.add_argument(
+        "--edit",
+        action="store_true",
+        help="Actually edit lineups (without this flag, only discovery is performed)"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging"
+    )
     args = parser.parse_args()
 
-    # Contest IDs from earlier submissions
-    contests = [
-        {"id": "15255304", "entries": 25},  # $6.25 entry fee
-        {"id": "15255305", "entries": 34},  # $17.00 entry fee
-    ]
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
 
-    # Filter to specific contest if requested
-    if args.contest:
-        contests = [c for c in contests if c["id"] == args.contest]
-        if not contests:
-            logger.error(f"Contest {args.contest} not in predefined list")
-            return
+    sport = args.sport.lower()
 
-    sport = Sport.NBA
-    single_game = False  # These are multi-game slates
-    salary_cap = 200  # Yahoo NBA salary cap
-
-    api = YahooDFSApiClient()
-
-    # First, let's get contest info to verify they're still editable
-    all_contests = api.get_contests(sport)
-
-    all_lineups = {}  # Store generated lineups by contest_id
-    contest_info_map = {}  # Store contest info for editing
-
-    for contest_info in contests:
-        contest_id = contest_info["id"]
-        num_lineups = contest_info["entries"]
-
-        # Try to find this contest in API for metadata
-        contest_data = None
-        for c in all_contests:
-            if str(c.get("id")) == contest_id:
-                contest_data = c
-                break
-
-        # Use API data if available, otherwise use defaults
-        # (Paid contests may not appear in public API)
-        if contest_data:
-            parsed = parse_api_contest(contest_data)
-            contest_name = parsed["name"]
-            entry_fee = parsed["entry_fee"]
-            start_time = parsed["slate_start"]
-        else:
-            # Default values for paid contests not in public API
-            logger.info(f"Contest {contest_id} not in public API (likely paid contest)")
-            contest_name = f"Contest {contest_id}"
-            entry_fee = contest_info.get("fee", "N/A")
-            # Default to 7pm EST today for NBA
-            from datetime import datetime
-            start_time = datetime.now().replace(hour=19, minute=0, second=0, microsecond=0)
-
+    if args.edit:
         logger.info(f"\n{'='*60}")
-        logger.info(f"Contest: {contest_name}")
-        logger.info(f"ID: {contest_id}")
-        logger.info(f"Entry Fee: ${entry_fee}")
-        logger.info(f"Start Time: {start_time}")
-        logger.info(f"Entries to edit: {num_lineups}")
+        logger.info(f"EDIT MODE - Will modify lineups on Yahoo")
+        logger.info(f"Sport: {sport.upper()}")
         logger.info(f"{'='*60}\n")
 
-        # Generate new lineups (player pool API works for any contest)
-        lineups = generate_lineups_for_contest(
-            contest_id=contest_id,
-            sport=sport,
-            single_game=single_game,
-            salary_cap=salary_cap,
-            num_lineups=num_lineups,
-        )
+        results = run_edit_all_slates(sport)
 
-        if not lineups:
-            logger.error(f"Failed to generate lineups for contest {contest_id}")
-            continue
-
-        logger.info(f"Generated {len(lineups)} new lineups for contest {contest_id}")
-        all_lineups[contest_id] = lineups
-        contest_info_map[contest_id] = {
-            "start_time": start_time,
-            "title": contest_name,
-        }
-
-    # If --edit flag is set, perform browser-based editing
-    if args.edit:
-        if not all_lineups:
-            logger.error("No lineups generated to edit")
-            return
-
-        logger.info("\n" + "="*60)
-        logger.info("Starting browser-based lineup editing...")
-        logger.info("="*60 + "\n")
-
-        for contest_id, lineups in all_lineups.items():
-            info = contest_info_map.get(contest_id, {})
-            result = edit_lineups_with_browser(
-                contest_id=contest_id,
-                lineups=lineups,
-                sport="nba",
-                contest_start_time=info.get("start_time"),
-                contest_title=info.get("title"),
-            )
-            if result["success"]:
-                logger.info(f"Contest {contest_id}: {result['edited_count']} lineups edited")
-            else:
-                logger.error(f"Contest {contest_id}: Edit failed - {result['message']}")
+        if results["success"]:
+            logger.info(f"\nEdit completed successfully!")
+            logger.info(f"  Slates processed: {results.get('slates_processed', 0)}")
+            logger.info(f"  Total entries edited: {results.get('total_entries_edited', 0)}")
+        else:
+            logger.error(f"\nEdit failed: {results.get('message', 'Unknown error')}")
+            sys.exit(1)
     else:
-        logger.info("\n" + "="*60)
-        logger.info("DRY RUN - Lineups generated but NOT edited")
-        logger.info("To actually edit lineups, run with --edit flag:")
-        logger.info("  python scripts/edit_contest_lineups.py --edit")
-        logger.info("="*60)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"DISCOVERY MODE - Will NOT modify lineups")
+        logger.info(f"Sport: {sport.upper()}")
+        logger.info(f"Run with --edit to actually edit lineups")
+        logger.info(f"{'='*60}\n")
+
+        slates = run_discovery_only(sport)
+
+        if slates:
+            # Show what would be edited
+            total_entries = sum(len(s["entries"]) for s in slates)
+            logger.info(f"\nWould edit {total_entries} entries across {len(slates)} slates")
+            logger.info(f"\nTo actually edit, run:")
+            logger.info(f"  python scripts/edit_contest_lineups.py --sport {sport} --edit")
+        else:
+            logger.info("\nNo entries to edit")
 
 
 if __name__ == "__main__":

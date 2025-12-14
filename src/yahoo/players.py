@@ -219,6 +219,9 @@ class PlayerPoolFetcher:
         session = self.db.get_session()
         try:
             for player in players:
+                # Get extended API data if available
+                api_data = getattr(player, '_api_data', {})
+
                 # Check if player already exists for this contest
                 existing = (
                     session.query(PlayerPoolDB)
@@ -230,6 +233,14 @@ class PlayerPoolFetcher:
                     # Update existing
                     existing.salary = player.salary
                     existing.is_active = not player.is_excluded
+                    # Update Yahoo projections and extended data
+                    existing.yahoo_projected_points = player.projected_points
+                    existing.fppg = api_data.get("fppg")
+                    existing.spread = api_data.get("spread")
+                    existing.over_under = api_data.get("over_under")
+                    existing.weather = api_data.get("weather")
+                    existing.injury_status = player.injury_status
+                    existing.injury_note = player.injury_note
                 else:
                     # Insert new
                     db_player = PlayerPoolDB(
@@ -244,6 +255,12 @@ class PlayerPoolFetcher:
                         opponent=player.opponent,
                         injury_status=player.injury_status,
                         injury_note=player.injury_note,
+                        # Yahoo projections and extended data
+                        yahoo_projected_points=player.projected_points,
+                        fppg=api_data.get("fppg"),
+                        spread=api_data.get("spread"),
+                        over_under=api_data.get("over_under"),
+                        weather=api_data.get("weather"),
                     )
                     session.add(db_player)
 

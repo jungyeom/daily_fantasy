@@ -677,7 +677,7 @@ class YahooSingleGameOptimizer:
                         player.min_exposure = min_exposure
                     if max_exposure is not None:
                         player.max_exposure = max_exposure
-            except:
+            except Exception:
                 pass
 
     def lock_player(self, player_id: str, as_superstar: bool = False) -> None:
@@ -708,7 +708,7 @@ class YahooSingleGameOptimizer:
                 player = self._optimizer.player_pool.get_player_by_id(full_id)
                 if player:
                     self._optimizer.remove_player(player)
-            except:
+            except Exception:
                 pass
         logger.info(f"Excluded player: {player_id}")
 

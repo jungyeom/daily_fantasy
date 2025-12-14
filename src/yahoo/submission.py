@@ -308,7 +308,7 @@ class LineupSubmitter:
                     if upload_link:
                         logger.info(f"Found upload link with selector: {selector}")
                         break
-                except:
+                except Exception:
                     continue
 
             if not upload_link:
@@ -345,7 +345,7 @@ class LineupSubmitter:
                     if file_input:
                         logger.info(f"Found file input with selector: {selector}")
                         break
-                except:
+                except Exception:
                     continue
 
             if not file_input:
@@ -372,7 +372,7 @@ class LineupSubmitter:
                     (By.XPATH, "//*[contains(text(), 'detected')]")
                 ))
                 logger.info("Lineup detection confirmed")
-            except:
+            except Exception:
                 logger.warning("Could not confirm lineup detection message")
 
             # Step 6: Click "Upload" button to submit
@@ -394,7 +394,7 @@ class LineupSubmitter:
                         logger.info(f"Found Upload button with selector: {selector}")
                         break
                     upload_btn = None
-                except:
+                except Exception:
                     continue
 
             # Fallback: search for button by text
@@ -407,7 +407,7 @@ class LineupSubmitter:
                             upload_btn = btn
                             logger.info("Found Upload button by text match")
                             break
-                    except:
+                    except Exception:
                         continue
 
             if not upload_btn:
@@ -477,7 +477,7 @@ class LineupSubmitter:
                             if error_text and len(error_text) > 5:  # Filter out empty/tiny elements
                                 logger.error(f"Validation error found: {error_text}")
                                 return True
-                except:
+                except Exception:
                     continue
 
             return False
@@ -513,7 +513,7 @@ class LineupSubmitter:
                 )
             )
             logger.info("Payment confirmation dialog detected")
-        except:
+        except Exception:
             logger.warning("Could not detect payment confirmation dialog")
 
         confirm_btn = None
@@ -543,7 +543,7 @@ class LineupSubmitter:
                     logger.info(f"Found confirmation button '{btn_text}' with selector: {selector}")
                     break
                 confirm_btn = None
-            except:
+            except Exception:
                 continue
 
         # Fallback: find all buttons and look for one that says "Submit"
@@ -559,7 +559,7 @@ class LineupSubmitter:
                         confirm_btn = btn
                         logger.info("Found Submit button via fallback search")
                         break
-                except:
+                except Exception:
                     continue
 
         if confirm_btn:
@@ -626,7 +626,7 @@ class LineupSubmitter:
                     if success_elem and success_elem.is_displayed():
                         logger.info(f"Submission confirmed: {success_elem.text[:100] if success_elem.text else 'Success element found'}")
                         return True
-                except:
+                except Exception:
                     continue
 
             # Check if modal is closed (another sign of success)
@@ -637,7 +637,7 @@ class LineupSubmitter:
                 if modal_closed:
                     logger.info("Upload modal closed - assuming success")
                     return True
-            except:
+            except Exception:
                 pass
 
             # If we got here without errors, assume success
@@ -772,7 +772,7 @@ class LineupSubmitter:
                 )
                 logger.info("Single lineup submitted successfully")
                 return True
-            except:
+            except Exception:
                 logger.warning("Could not confirm submission")
                 return True  # Assume success if no error
 
@@ -863,7 +863,7 @@ class LineupSubmitter:
                     btn.click()
                     time.sleep(0.5)
                     cancelled += 1
-                except:
+                except Exception:
                     continue
 
             logger.info(f"Cancelled {cancelled} entries")

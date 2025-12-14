@@ -86,8 +86,9 @@ class LineupBuilder:
         # Single-game requires fewer players (5 per lineup vs 8-10 for classic)
         min_players = 5 if self.single_game else 8
         if len(valid_players) < min_players:
-            logger.warning(f"Not enough players with projections ({len(valid_players)}, need {min_players})")
-            return []
+            error_msg = f"Not enough players with projections ({len(valid_players)}, need {min_players}) for contest {contest_id}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Load players into optimizer
         self.optimizer.load_players(valid_players)

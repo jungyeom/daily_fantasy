@@ -34,8 +34,8 @@ class AlertConfig:
         return cls(
             enabled=os.getenv("DFS_ALERTS_ENABLED", "true").lower() == "true",
             sendgrid_api_key=os.getenv("DFS_SENDGRID_API_KEY"),
-            from_address=os.getenv("DFS_ALERT_FROM", "dfs-alerts@yourdomain.com"),
-            to_address=os.getenv("DFS_ALERT_TO", "jungyeom0213@gmail.com"),
+            from_address=os.getenv("DFS_ALERT_FROM", ""),
+            to_address=os.getenv("DFS_ALERT_TO", ""),
         )
 
     @classmethod

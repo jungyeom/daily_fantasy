@@ -97,7 +97,7 @@ class ResultsFetcher:
             match = re.search(r"([\d,]+)", text)
             if match:
                 return int(match.group(1).replace(",", ""))
-        except:
+        except Exception:
             pass
 
         return 0
@@ -130,7 +130,7 @@ class ResultsFetcher:
                 my_entries_tab.click()
                 import time
                 time.sleep(1)
-            except:
+            except Exception:
                 pass  # May already be showing user's entries
 
             # Find all entry rows
@@ -196,7 +196,7 @@ class ResultsFetcher:
                 winnings_text = winnings_elem.text.strip()
                 if winnings_text and winnings_text != "-":
                     winnings = Decimal(re.sub(r"[^\d.]", "", winnings_text))
-            except:
+            except Exception:
                 pass
 
             # Try to get lineup ID (may be in data attribute or link)
@@ -205,7 +205,7 @@ class ResultsFetcher:
                 lineup_id_attr = row.get_attribute("data-lineup-id")
                 if lineup_id_attr:
                     lineup_id = int(lineup_id_attr)
-            except:
+            except Exception:
                 pass
 
             # Calculate percentile
@@ -349,7 +349,7 @@ class ResultsFetcher:
                         "current_points": current_points,
                         "current_rank": current_rank,
                     })
-                except:
+                except Exception:
                     continue
 
             return scores

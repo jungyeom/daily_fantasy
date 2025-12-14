@@ -258,7 +258,7 @@ class LineupEditor:
                         logger.info("Selected 'Edit' action")
                         time.sleep(1)
                         return True
-                except:
+                except Exception:
                     continue
 
             # Try CSS selectors
@@ -270,7 +270,7 @@ class LineupEditor:
                         logger.info(f"Selected Edit via: {selector}")
                         time.sleep(1)
                         return True
-                except:
+                except Exception:
                     continue
 
             # Check if Edit is already selected (might be default)
@@ -314,7 +314,7 @@ class LineupEditor:
                             logger.info(f"Selected sport: {sport_upper}")
                             time.sleep(1)
                             return True
-                except:
+                except Exception:
                     continue
 
             # Try data attributes
@@ -332,7 +332,7 @@ class LineupEditor:
                         logger.info(f"Selected sport via: {selector}")
                         time.sleep(1)
                         return True
-                except:
+                except Exception:
                     continue
 
             logger.warning(f"Could not find sport selector for: {sport}")
@@ -380,7 +380,7 @@ class LineupEditor:
                         if anchor.is_displayed() and "skip" not in text.lower():
                             slate_elements.append(anchor)
                             logger.debug(f"Found slate anchor: {text[:60]}")
-                except:
+                except Exception:
                     continue
 
             # Second try: look for elements in ys-pillChoose (Yahoo's pill chooser component)
@@ -391,7 +391,7 @@ class LineupEditor:
                     for anchor in anchors_in_pill:
                         if anchor.is_displayed():
                             slate_elements.append(anchor)
-                except:
+                except Exception:
                     pass
 
             # Third try: data attributes
@@ -406,7 +406,7 @@ class LineupEditor:
                     try:
                         elements = driver.find_elements(By.CSS_SELECTOR, selector)
                         slate_elements.extend(elements)
-                    except:
+                    except Exception:
                         continue
 
             if not slate_elements:
@@ -442,7 +442,7 @@ class LineupEditor:
                         logger.info(f"Clicked first available slate: {elem.text[:50] if elem.text else 'unknown'}")
                         time.sleep(3)
                         return True
-                except:
+                except Exception:
                     continue
 
             logger.warning("Could not select any slate")
@@ -489,7 +489,7 @@ class LineupEditor:
 
             return False
 
-        except:
+        except Exception:
             return False
 
     def _download_template(self, driver: WebDriver) -> Optional[Path]:
@@ -537,7 +537,7 @@ class LineupEditor:
                             result = self._wait_for_download(timeout=30)
                             if result:
                                 return result
-                    except:
+                    except Exception:
                         continue
 
                 # PRIORITY 2: Look for links with export/template in href
@@ -581,7 +581,7 @@ class LineupEditor:
                             result = self._wait_for_download(timeout=30)
                             if result:
                                 return result
-                    except:
+                    except Exception:
                         continue
 
                 # Wait and try again
@@ -873,7 +873,7 @@ class LineupEditor:
                     if file_input:
                         logger.info(f"Found file input: {selector}")
                         break
-                except:
+                except Exception:
                     continue
 
             if not file_input:
@@ -939,7 +939,7 @@ class LineupEditor:
                 if btn and btn.is_displayed() and btn.is_enabled():
                     logger.info(f"Found upload button with: {selector}")
                     return btn
-            except:
+            except Exception:
                 continue
 
         # PRIORITY 2: Try by button text iteration
@@ -950,7 +950,7 @@ class LineupEditor:
                 if "upload" in text and btn.is_displayed() and btn.is_enabled():
                     logger.info(f"Found button by text: {btn.text}")
                     return btn
-            except:
+            except Exception:
                 continue
 
         # PRIORITY 3: Other submit-like buttons
@@ -959,7 +959,7 @@ class LineupEditor:
                 text = btn.text.strip().lower()
                 if text in ("submit", "save", "edit", "update") and btn.is_displayed():
                     return btn
-            except:
+            except Exception:
                 continue
 
         # Try input[type='submit']
@@ -968,7 +968,7 @@ class LineupEditor:
             for inp in inputs:
                 if inp.is_displayed():
                     return inp
-        except:
+        except Exception:
             pass
 
         # Try common selectors
@@ -978,7 +978,7 @@ class LineupEditor:
                 for elem in elements:
                     if elem.is_displayed() and elem.is_enabled():
                         return elem
-            except:
+            except Exception:
                 continue
 
         return None

@@ -6,7 +6,7 @@ from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.date import DateTrigger  # Used in schedule_contest_pipeline
 
 from ..common.config import get_config
 from ..common.database import get_database, ContestDB

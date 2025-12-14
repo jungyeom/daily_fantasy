@@ -160,7 +160,7 @@ class YahooAuth:
                     )
                 )
                 return True
-            except:
+            except Exception:
                 return False
 
         except Exception as e:
@@ -224,7 +224,7 @@ class YahooAuth:
                 logger.warning(f"Timeout loading yahoo.com, trying sports.yahoo.com: {e}")
                 try:
                     driver.get("https://sports.yahoo.com")
-                except:
+                except Exception:
                     pass
             finally:
                 driver.set_page_load_timeout(original_timeout)

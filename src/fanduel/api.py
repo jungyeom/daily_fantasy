@@ -332,14 +332,22 @@ def parse_contest(raw: dict) -> dict:
     else:
         slate_start = datetime.now()
 
+    # Extract entry count from nested structure
+    entries_data = raw.get("entries", {})
+    entry_count = entries_data.get("count", 0) if isinstance(entries_data, dict) else 0
+
+    # Extract size (max total entries) from nested structure
+    size_data = raw.get("size", {})
+    size = size_data.get("max", 0) if isinstance(size_data, dict) else 0
+
     return {
         "id": str(raw.get("id", "")),
         "fixture_list_id": raw.get("fixture_list", {}).get("id"),
         "name": raw.get("name", ""),
         "entry_fee": entry_fee,
-        "max_entries": raw.get("max_entries", 1),
-        "entry_count": raw.get("entry_count", 0),
-        "size": raw.get("size", {}).get("max", 0),  # Max total entries
+        "max_entries": raw.get("max_entries_per_user", 1),  # Max entries per user
+        "entry_count": entry_count,
+        "size": size,  # Max total entries for contest
         "prize_pool": prize_pool,
         "slate_start": slate_start,
         "is_guaranteed": raw.get("guaranteed", False),

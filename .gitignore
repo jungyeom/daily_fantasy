@@ -53,6 +53,11 @@ data/
 config/settings.yaml
 !config/settings.yaml.example
 
+# Environment files
+.env
+.env.local
+.env.*.local
+
 # Cookies/sessions
 data/.yahoo_cookies.pkl
 

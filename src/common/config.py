@@ -5,7 +5,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
+
+# Load .env file from project root if it exists
+_env_path = Path(__file__).parent.parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +24,17 @@ class YahooConfig(BaseModel):
     timeout: int = 30  # Page load timeout in seconds
     screenshot_on_error: bool = True
     user_agent: Optional[str] = None
+
+
+class FanDuelConfig(BaseModel):
+    """FanDuel API settings (read-only data collection).
+
+    Tokens must be manually extracted from browser dev tools.
+    See src/fanduel/api.py for instructions.
+    """
+    auth_token: str = ""  # Basic auth token (rarely expires)
+    session_token: str = ""  # X-Auth-Token (expires periodically)
+    rate_limit_delay: float = 0.5  # Delay between API calls in seconds
 
 
 class EmailConfig(BaseModel):
@@ -121,6 +138,7 @@ class SchedulerConfig(BaseModel):
 class Config(BaseModel):
     """Main application configuration."""
     yahoo: YahooConfig = Field(default_factory=YahooConfig)
+    fanduel: FanDuelConfig = Field(default_factory=FanDuelConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     optimizer: OptimizerConfig = Field(default_factory=OptimizerConfig)
@@ -173,6 +191,8 @@ class Config(BaseModel):
         env_mappings = {
             "DFS_YAHOO_USERNAME": ("yahoo", "username"),
             "DFS_YAHOO_PASSWORD": ("yahoo", "password"),
+            "FANDUEL_AUTH_TOKEN": ("fanduel", "auth_token"),
+            "FANDUEL_SESSION_TOKEN": ("fanduel", "session_token"),
             "DFS_SENDGRID_API_KEY": ("email", "sendgrid_api_key"),
             "DFS_EMAIL_USERNAME": ("email", "smtp_username"),
             "DFS_EMAIL_PASSWORD": ("email", "smtp_password"),

@@ -8,7 +8,6 @@ from pydfs_lineup_optimizer.settings import BaseSettings, LineupPosition
 from pydfs_lineup_optimizer.sites.sites_registry import SitesRegistry
 from pydfs_lineup_optimizer.sites.yahoo.importer import YahooCSVImporter
 from pydfs_lineup_optimizer.lineup_exporter import CSVLineupExporter
-
 from ..common.config import get_config
 from ..common.models import Sport, Player
 
@@ -527,11 +526,10 @@ class YahooSingleGameOptimizer:
         self._players_loaded = True
 
         # For single-game contests, require players from at least 2 different teams
-        # (both teams in the matchup should be represented)
         available_teams = len(set(p.team for p in players if p.team))
         if available_teams >= 2:
             self._optimizer.set_total_teams(min_teams=2)
-        # For multi-game slates with 3+ teams, the regular optimizer handles diversity
+            logger.info("Set min_teams=2 for single-game contest")
 
         logger.info(
             f"Loaded {len(pdfs_players)} players into single-game optimizer "

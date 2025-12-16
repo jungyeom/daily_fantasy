@@ -174,7 +174,7 @@ class DailyFantasyFuelSource(ProjectionSource):
 
         DFF FanDuel table cell structure varies by sport (as of Dec 2024):
 
-        NFL structure (no START column):
+        NFL structure (has DvP, no START):
         - Cell 0: Player card (combined info - skip)
         - Cell 1: POS
         - Cell 2: NAME
@@ -186,18 +186,29 @@ class DailyFantasyFuelSource(ProjectionSource):
         - Cell 8: VALUE
         - Cell 9+: Historical averages
 
-        NBA/MLB/NHL structure (has START column):
+        NBA structure (has START and DvP):
         - Cell 0: Player card (combined info - skip)
         - Cell 1: POS
         - Cell 2: NAME
         - Cell 3: SALARY
-        - Cell 4: START (expected starter status)
+        - Cell 4: START
         - Cell 5: TEAM
         - Cell 6: OPP
         - Cell 7: DvP
         - Cell 8: FD FP PROJECTED <- projection
         - Cell 9: VALUE
         - Cell 10+: Historical averages
+
+        NHL structure (no START, no DvP):
+        - Cell 0: Player card (combined info - skip)
+        - Cell 1: POS
+        - Cell 2: NAME
+        - Cell 3: SALARY
+        - Cell 4: TEAM
+        - Cell 5: OPP
+        - Cell 6: FD FP PROJECTED <- projection
+        - Cell 7: VALUE
+        - Cell 8+: Lines/Historical averages
 
         Args:
             row: BeautifulSoup row element
@@ -207,28 +218,28 @@ class DailyFantasyFuelSource(ProjectionSource):
             Projection object or None
         """
         cells = row.find_all("td")
-        if len(cells) < 9:  # Need at least 9 cells to get projected points
+        if len(cells) < 8:  # Need at least 8 cells to get projected points
             return None
 
         try:
-            # NFL has no START column, other sports have it
-            # This shifts the column indices for NFL
-            has_start_column = sport != Sport.NFL
-
             # Extract core player info
             position = cells[1].get_text(strip=True).upper()
             name = cells[2].get_text(strip=True)
             salary_text = cells[3].get_text(strip=True)
 
-            # Column indices differ based on START column presence
-            if has_start_column:
-                # NBA/MLB/NHL: Cell 4 is START, Cell 5 is TEAM
-                team_idx, opp_idx, dvp_idx, proj_idx, value_idx = 5, 6, 7, 8, 9
+            # Column indices differ by sport
+            if sport == Sport.NBA:
+                # NBA: has START (cell 4) and DvP (cell 7)
+                team_idx, opp_idx, proj_idx, value_idx = 5, 6, 8, 9
                 hist_start_idx = 10
-            else:
-                # NFL: No START column, Cell 4 is TEAM
-                team_idx, opp_idx, dvp_idx, proj_idx, value_idx = 4, 5, 6, 7, 8
+            elif sport == Sport.NFL:
+                # NFL: has DvP (cell 6), no START
+                team_idx, opp_idx, proj_idx, value_idx = 4, 5, 7, 8
                 hist_start_idx = 9
+            else:
+                # NHL/MLB/others: no START, no DvP
+                team_idx, opp_idx, proj_idx, value_idx = 4, 5, 6, 7
+                hist_start_idx = 8
 
             team = cells[team_idx].get_text(strip=True).upper() if len(cells) > team_idx else ""
             opponent = cells[opp_idx].get_text(strip=True).upper() if len(cells) > opp_idx else ""

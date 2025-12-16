@@ -12,6 +12,17 @@ yahoo:
   screenshot_on_error: true
   user_agent: null  # Custom user agent (null = default)
 
+# FanDuel DFS Settings (read-only data collection)
+# Tokens must be manually extracted from browser dev tools:
+# 1. Log into FanDuel DFS (https://www.fanduel.com/contests)
+# 2. Open dev tools (F12) -> Network tab -> find request to api.fanduel.com
+# 3. Copy 'Authorization' header -> FANDUEL_AUTH_TOKEN env var
+# 4. Copy 'X-Auth-Token' header -> FANDUEL_SESSION_TOKEN env var
+fanduel:
+  auth_token: ""  # Set via FANDUEL_AUTH_TOKEN env var (Basic auth, rarely expires)
+  session_token: ""  # Set via FANDUEL_SESSION_TOKEN env var (expires periodically)
+  rate_limit_delay: 0.5  # Delay between API calls in seconds
+
 # Email Notification Settings (SendGrid)
 email:
   enabled: false

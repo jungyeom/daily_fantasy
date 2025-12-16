@@ -332,6 +332,107 @@ class ContestEntryDB(Base):
     )
 
 
+class FanDuelFixtureListDB(Base):
+    """FanDuel fixture lists (slates) - equivalent to Yahoo series."""
+    __tablename__ = "fanduel_fixture_lists"
+
+    id = Column(Integer, primary_key=True)  # FanDuel fixture list ID
+    sport = Column(String(10), nullable=False)
+    label = Column(String(255))  # Slate name/description
+    slate_start = Column(DateTime, nullable=False)
+    salary_cap = Column(Integer, default=60000)  # FanDuel default is $60,000
+
+    # Aggregated info
+    contest_count = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    contests = relationship("FanDuelContestDB", back_populates="fixture_list")
+    players = relationship("FanDuelPlayerPoolDB", back_populates="fixture_list")
+
+    __table_args__ = (
+        Index("idx_fd_fixture_lists_sport_date", "sport", "slate_start"),
+    )
+
+
+class FanDuelContestDB(Base):
+    """FanDuel contests table - stores contest metadata."""
+    __tablename__ = "fanduel_contests"
+
+    id = Column(String, primary_key=True)  # FanDuel contest ID
+    fixture_list_id = Column(Integer, ForeignKey("fanduel_fixture_lists.id"))
+    sport = Column(String(10), nullable=False)
+    name = Column(String(255))
+    entry_fee = Column(Float, nullable=False)
+    max_entries = Column(Integer)  # Max entries per user
+    entry_count = Column(Integer)  # Current entry count
+    size = Column(Integer)  # Max total entries for contest
+    prize_pool = Column(Float)
+    slate_start = Column(DateTime, nullable=False)
+    status = Column(String(20), default="upcoming")
+
+    # Contest type info
+    contest_type = Column(String(50))  # 'tournament', 'h2h', '50-50', etc.
+    is_guaranteed = Column(Boolean, default=False)
+    salary_cap = Column(Integer, default=60000)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    fixture_list = relationship("FanDuelFixtureListDB", back_populates="contests")
+
+    __table_args__ = (
+        Index("idx_fd_contests_fixture_list", "fixture_list_id"),
+        Index("idx_fd_contests_sport_date", "sport", "slate_start"),
+        Index("idx_fd_contests_status", "status"),
+        Index("idx_fd_contests_entry_fee", "entry_fee"),
+        Index("idx_fd_contests_guaranteed", "is_guaranteed"),
+    )
+
+
+class FanDuelPlayerPoolDB(Base):
+    """FanDuel player pools - player data for each fixture list (slate)."""
+    __tablename__ = "fanduel_player_pools"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fixture_list_id = Column(Integer, ForeignKey("fanduel_fixture_lists.id"), nullable=False)
+    fanduel_player_id = Column(String(50), nullable=False)
+    name = Column(String(100), nullable=False)
+    first_name = Column(String(50))
+    last_name = Column(String(50))
+    team = Column(String(10))
+    team_name = Column(String(50))
+    position = Column(String(20))
+    salary = Column(Integer, nullable=False)
+
+    # FanDuel projection data
+    fppg = Column(Float)  # Fantasy points per game
+
+    # Game info
+    game_id = Column(String(50))
+    opponent = Column(String(10))
+
+    # Injury info
+    injury_status = Column(String(20))
+    injury_details = Column(Text)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    fixture_list = relationship("FanDuelFixtureListDB", back_populates="players")
+
+    __table_args__ = (
+        Index("idx_fd_player_pools_fixture_list", "fixture_list_id"),
+        Index("idx_fd_player_pools_player_id", "fanduel_player_id"),
+        Index("idx_fd_player_pools_unique", "fixture_list_id", "fanduel_player_id", unique=True),
+        Index("idx_fd_player_pools_team", "team"),
+        Index("idx_fd_player_pools_position", "position"),
+    )
+
+
 class SchedulerRunDB(Base):
     """Tracks scheduler job executions for debugging and monitoring."""
     __tablename__ = "scheduler_runs"

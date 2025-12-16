@@ -47,6 +47,27 @@ class YahooAPIError(YahooError):
     pass
 
 
+# FanDuel-related exceptions
+class FanDuelError(DailyFantasyError):
+    """Base exception for FanDuel-related errors."""
+    pass
+
+
+class FanDuelAuthError(FanDuelError):
+    """Failed to authenticate with FanDuel."""
+    pass
+
+
+class FanDuelAPIError(FanDuelError):
+    """Failed to make API request to FanDuel API."""
+    pass
+
+
+class FanDuelTokenExpiredError(FanDuelError):
+    """FanDuel session token has expired and needs to be refreshed."""
+    pass
+
+
 # Projection-related exceptions
 class ProjectionError(DailyFantasyError):
     """Base exception for projection-related errors."""

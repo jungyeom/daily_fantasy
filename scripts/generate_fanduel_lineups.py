@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from pydfs_lineup_optimizer import Site, Sport as PDFSSport, get_optimizer, PlayersGroup, TeamStack, PositionsStack
-from pydfs_lineup_optimizer.player import Player as PDFSPlayer
+from pydfs_lineup_optimizer.player import Player as PDFSPlayer, GameInfo
 
 from src.common.models import Sport
 from src.contests.selector import ContestSelector
@@ -344,13 +344,13 @@ def apply_nhl_stacking_rules(optimizer, players: list[PDFSPlayer], goalie_team: 
 
     Rules implemented:
     1. Line stack: Require C + W + W from same team (forward line correlation)
-    2. No opposing skaters vs goalie: Exclude skaters from teams playing against goalie
+    2. No opposing skaters vs goalie: Goalie and opposing skaters cannot be in same lineup
 
     Args:
         optimizer: pydfs LineupOptimizer instance
         players: List of players loaded into optimizer
-        goalie_team: Optional team code for goalie (for correlation)
-        team_opponents: Dict mapping team -> opponent team
+        goalie_team: Optional team code for goalie (for correlation) - DEPRECATED, not used
+        team_opponents: Dict mapping team -> opponent team - DEPRECATED, not used
     """
     # Rule 1: Line Stack - Require at least one team with C + W + W
     # Using PositionsStack to enforce forward line stacking
@@ -366,73 +366,21 @@ def apply_nhl_stacking_rules(optimizer, players: list[PDFSPlayer], goalie_team: 
         logger.warning(f"Could not apply line stack: {e}")
 
     # Rule 2: No opposing skaters vs goalie
-    # This is the KEY rule - never play skaters against your own goalie
-    if goalie_team and team_opponents:
-        exclude_opposing_skaters(optimizer, goalie_team, team_opponents)
+    # Use restrict_positions_for_opposing_team to ensure goalie and opposing skaters
+    # are never in the same lineup. This is enforced per-lineup, not globally.
+    # G cannot be paired with C, W, D from opposing team (0 allowed)
+    try:
+        optimizer.restrict_positions_for_opposing_team(
+            ["G"],  # Goalie position
+            ["C", "W", "D"],  # Skater positions (Center, Winger, Defenseman)
+        )
+        logger.info("Applied NHL goalie constraint: No opposing skaters vs goalie (per lineup)")
+    except Exception as e:
+        logger.warning(f"Could not apply goalie constraint: {e}")
 
 
-def get_best_goalie_team(players: list[dict]) -> str:
-    """Determine the best goalie's team for correlation.
-
-    Selects the goalie with highest projected points.
-
-    Args:
-        players: List of merged player dicts
-
-    Returns:
-        Team code of best projected goalie
-    """
-    goalies = [p for p in players if p.get("position") == "G"]
-    if not goalies:
-        return None
-
-    # Sort by projected points
-    goalies.sort(key=lambda g: g.get("projected_points", 0), reverse=True)
-    best_goalie = goalies[0]
-
-    logger.info(
-        f"Best projected goalie: {best_goalie['name']} ({best_goalie['team']}) "
-        f"- {best_goalie.get('projected_points', 0):.1f} pts"
-    )
-
-    return best_goalie.get("team")
 
 
-def exclude_opposing_skaters(optimizer, goalie_team: str, team_opponents: dict):
-    """Exclude skaters from teams opposing the goalie.
-
-    The logic: If your goalie plays for team A, and team A is playing against team B,
-    then every goal team B scores hurts your goalie. So we should NOT have any
-    skaters from team B in our lineup.
-
-    Args:
-        optimizer: pydfs LineupOptimizer instance
-        goalie_team: Goalie's team code
-        team_opponents: Dict mapping team code -> opponent team code
-    """
-    if not team_opponents or goalie_team not in team_opponents:
-        logger.debug(f"No opponent found for goalie team {goalie_team}")
-        return
-
-    opponent_team = team_opponents.get(goalie_team)
-    if not opponent_team:
-        return
-
-    # Get all players and remove skaters from opponent team
-    excluded_count = 0
-    excluded_names = []
-    for player in optimizer.player_pool.all_players:
-        if player.team == opponent_team and "G" not in player.positions:
-            try:
-                optimizer.player_pool.remove_player(player)
-                excluded_count += 1
-                excluded_names.append(player.full_name)
-            except Exception:
-                pass
-
-    if excluded_count > 0:
-        logger.info(f"Excluded {excluded_count} skaters from {opponent_team} (opposing goalie's team {goalie_team})")
-        logger.debug(f"Excluded players: {excluded_names[:5]}...")
 
 
 def estimate_fanduel_salary(projected_points: float, position: str, sport: Sport) -> int:
@@ -583,6 +531,14 @@ def generate_lineups(
         # Merge with DFF projections
         merged_players = merge_projections_with_salaries(fd_players, dff_projections)
 
+        # Build GameInfo map from team_opponents
+        # GameInfo needs home_team and away_team - we'll use team as home, opponent as away
+        # The actual home/away doesn't matter for the opposing team constraint
+        team_game_info = {}
+        if team_opponents:
+            for team, opponent in team_opponents.items():
+                team_game_info[team] = GameInfo(home_team=team, away_team=opponent, starts_at=None)
+
         # Convert to pydfs players
         players = []
         for p in merged_players:
@@ -591,14 +547,17 @@ def generate_lineups(
                 continue
 
             try:
+                team = p["team"] or "UNK"
+                game_info = team_game_info.get(team)
                 player = PDFSPlayer(
                     player_id=p["fanduel_id"],
                     first_name=p["first_name"],
                     last_name=p["last_name"],
                     positions=[p["position"]],
-                    team=p["team"] or "UNK",
+                    team=team,
                     salary=p["salary"],
                     fppg=proj_pts,
+                    game_info=game_info,
                 )
                 players.append(player)
             except Exception as e:
@@ -627,10 +586,8 @@ def generate_lineups(
 
     # Apply NHL-specific stacking rules
     if sport == Sport.NHL and not use_estimated_salaries:
-        # Get best goalie's team for correlation
-        goalie_team = get_best_goalie_team(merged_players)
-        # Apply stacking rules with team matchup data for opposing skater exclusion
-        apply_nhl_stacking_rules(optimizer, players, goalie_team=goalie_team, team_opponents=team_opponents)
+        # Apply stacking rules (line stack + goalie vs opposing skaters constraint)
+        apply_nhl_stacking_rules(optimizer, players)
 
     # ==========================================================================
     # Phase 2 & 3: Vegas-Adjusted Fantasy Points Strategy
@@ -808,7 +765,7 @@ def print_verification_summary(
     if sport == Sport.NHL and lineups:
         print("\n🏒 NHL STACKING RULES:")
         print("  ✅ Line stack enforced: C + W + W from same team")
-        print("  ✅ Goalie correlation: No opposing skaters vs goalie")
+        print("  ✅ Goalie constraint: Goalie and opposing skaters never in same lineup")
 
     # 3. Player Exposure
     print("\n👥 PLAYER EXPOSURE (Top 15):")

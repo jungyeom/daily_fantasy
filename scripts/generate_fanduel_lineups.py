@@ -232,7 +232,7 @@ def merge_projections_with_salaries(
         Merged player list with salaries and projections
     """
     # Injury statuses that should be excluded
-    EXCLUDED_INJURY_STATUSES = {"ir", "o", "out", "d"}  # IR, Out, Doubtful
+    EXCLUDED_INJURY_STATUSES = {"ir", "o", "out", "d", "dtd"}  # IR, Out, Doubtful, Day-to-Day
 
     # Build lookup from DFF projections by normalized name
     dff_lookup = {}
@@ -288,7 +288,7 @@ def merge_projections_with_salaries(
         merged.append(fd_player)
 
     logger.info(f"Matched {matched}/{len(fd_players)} FanDuel players with DFF projections")
-    logger.info(f"Excluded {injured_excluded} injured players (IR/Out/Doubtful)")
+    logger.info(f"Excluded {injured_excluded} injured/DTD players (IR/Out/Doubtful/DTD)")
     if unmatched_fd and len(unmatched_fd) <= 10:
         logger.debug(f"Unmatched FanDuel players: {unmatched_fd[:10]}")
 

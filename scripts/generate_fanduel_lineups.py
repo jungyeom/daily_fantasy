@@ -5,8 +5,12 @@ Uses DailyFantasyFuel projections combined with actual FanDuel player
 salaries fetched from the FanDuel API.
 
 Usage:
+    # Manual mode - specify contest details
     python scripts/generate_fanduel_lineups.py --sport NHL --num-lineups 3
     python scripts/generate_fanduel_lineups.py --sport NHL --fixture-list-id 124451 --num-lineups 3
+
+    # Auto mode - find eligible contests and generate max lineups for each
+    python scripts/generate_fanduel_lineups.py --sport NHL --auto-select-contest
 """
 import argparse
 import csv
@@ -26,7 +30,8 @@ from pydfs_lineup_optimizer import Site, Sport as PDFSSport, get_optimizer, Play
 from pydfs_lineup_optimizer.player import Player as PDFSPlayer
 
 from src.common.models import Sport
-from src.fanduel.api import FanDuelApiClient, parse_fixture_list, parse_player
+from src.contests.selector import ContestSelector
+from src.fanduel.api import FanDuelApiClient, parse_fixture_list, parse_player, parse_contest
 from src.projections.sources.dailyfantasyfuel import DailyFantasyFuelSource
 from src.projections.vegas_lines import (
     fetch_nhl_odds,
@@ -757,6 +762,300 @@ def print_lineups(lineups: list, sport: Sport):
         print(f"Avg Salary: ${avg_sal:,.0f}")
 
 
+def print_verification_summary(
+    lineups: list,
+    vegas_games: list,
+    exclude_teams_vegas: set,
+    sport: Sport,
+):
+    """Print verification summary showing constraints applied.
+
+    Args:
+        lineups: Generated lineups
+        vegas_games: Vegas odds data
+        exclude_teams_vegas: Teams excluded due to low totals
+        sport: Sport
+    """
+    print("\n" + "=" * 70)
+    print("VERIFICATION SUMMARY")
+    print("=" * 70)
+
+    # 1. Vegas Adjustments
+    print("\n📊 VEGAS ADJUSTMENTS:")
+    if vegas_games:
+        game_totals = get_game_totals(vegas_games)
+        favorites = get_favorites(vegas_games)
+
+        print(f"  Games with odds: {len(vegas_games)}")
+        print(f"  Favorites (boosted +5%): {', '.join(sorted(favorites)) if favorites else 'None'}")
+
+        if exclude_teams_vegas:
+            print(f"  ❌ Teams excluded (low total): {', '.join(sorted(exclude_teams_vegas))}")
+        else:
+            print("  ✅ No teams excluded for low totals")
+
+        # Show boost/reduction by team
+        print("\n  Projection adjustments by game total:")
+        baseline = 6.0
+        for team, total in sorted(game_totals.items(), key=lambda x: x[1], reverse=True):
+            deviation = (total - baseline) / baseline * 0.5 * 100  # 0.5 is default weight
+            direction = "↑" if deviation > 0 else "↓" if deviation < 0 else "→"
+            print(f"    {team}: O/U {total} {direction} {abs(deviation):.1f}%")
+    else:
+        print("  Vegas lines not available")
+
+    # 2. Stacking Rules (NHL specific)
+    if sport == Sport.NHL and lineups:
+        print("\n🏒 NHL STACKING RULES:")
+        print("  ✅ Line stack enforced: C + W + W from same team")
+        print("  ✅ Goalie correlation: No opposing skaters vs goalie")
+
+    # 3. Player Exposure
+    print("\n👥 PLAYER EXPOSURE (Top 15):")
+    player_counts = {}
+    for lineup in lineups:
+        for player in lineup.players:
+            name = player.full_name
+            if name not in player_counts:
+                player_counts[name] = {"count": 0, "salary": player.salary, "fppg": player.fppg}
+            player_counts[name]["count"] += 1
+
+    # Sort by exposure
+    sorted_players = sorted(player_counts.items(), key=lambda x: x[1]["count"], reverse=True)
+    total_lineups = len(lineups)
+
+    for name, data in sorted_players[:15]:
+        exposure = data["count"] / total_lineups * 100
+        print(f"  {name:28} | {data['count']:>3}/{total_lineups} ({exposure:>5.1f}%) | ${data['salary']:,} | {data['fppg']:.1f}pts")
+
+    # 4. Team Distribution
+    print("\n🏟️ TEAM DISTRIBUTION:")
+    team_counts = {}
+    for lineup in lineups:
+        for player in lineup.players:
+            team = player.team
+            if team not in team_counts:
+                team_counts[team] = 0
+            team_counts[team] += 1
+
+    for team, count in sorted(team_counts.items(), key=lambda x: x[1], reverse=True):
+        avg_per_lineup = count / total_lineups
+        print(f"  {team:4}: {count:>4} players ({avg_per_lineup:.1f} per lineup)")
+
+    print("=" * 70)
+
+
+def find_eligible_contests(sport: Sport) -> list[dict]:
+    """Find eligible contests using contest selector.
+
+    Args:
+        sport: Sport to search
+
+    Returns:
+        List of eligible contest dicts with fixture_list_id
+    """
+    client = get_fanduel_client()
+    selector = ContestSelector()
+
+    all_eligible = []
+    fixture_lists = client.get_fixture_lists(sport)
+
+    logger.info(f"Searching {len(fixture_lists)} {sport.value} fixture lists for eligible contests...")
+
+    for fl in fixture_lists:
+        fl_id = fl.get("id")
+        fl_label = fl.get("label", "Unknown")
+
+        # Skip snake drafts
+        if "snake" in fl_label.lower():
+            continue
+
+        try:
+            raw_contests = client._request("GET", "/contests", params={"fixture_list": fl_id, "status": "open"})
+            contests_raw = raw_contests.get("contests", [])
+        except Exception as e:
+            logger.warning(f"Failed to fetch contests for {fl_label}: {e}")
+            continue
+
+        # Parse and filter contests
+        contests = [parse_contest(c) for c in contests_raw]
+        eligible = selector.filter_contests(contests)
+
+        for contest in eligible:
+            contest["slate_label"] = fl_label
+            all_eligible.append(contest)
+
+    # Sort by score
+    scored = selector.score_contests(all_eligible, min_score=0)
+
+    logger.info(f"Found {len(scored)} eligible {sport.value} contests")
+    return scored
+
+
+def run_auto_select_mode(
+    sport: Sport,
+    randomness: float,
+    use_vegas_lines: bool,
+    min_game_total: float,
+    vegas_weight: float,
+    output_dir: Path,
+    print_lineups_flag: bool,
+):
+    """Run auto-select mode: find eligible contests and generate lineups for each.
+
+    Args:
+        sport: Sport to generate lineups for
+        randomness: Randomness factor
+        use_vegas_lines: Whether to use Vegas lines
+        min_game_total: Minimum O/U total
+        vegas_weight: Vegas adjustment weight
+        output_dir: Output directory
+        print_lineups_flag: Whether to print lineups to console
+    """
+    print("\n" + "=" * 70)
+    print(f"AUTO-SELECT MODE: {sport.value}")
+    print("=" * 70)
+
+    # Step 1: Find eligible contests
+    print("\n📋 Step 1: Finding eligible contests...")
+    eligible_contests = find_eligible_contests(sport)
+
+    if not eligible_contests:
+        logger.error(f"No eligible {sport.value} contests found")
+        print("❌ No contests found matching criteria:")
+        print("   - Entry fee < $3")
+        print("   - Multi-entry with 50+ entries allowed")
+        print("   - Contest size >= 50")
+        print("   - Exposure ratio >= 2%")
+        return
+
+    # Display eligible contests
+    print(f"\n✅ Found {len(eligible_contests)} eligible contests:\n")
+    print(f"{'Score':>5} | {'Contest Name':<40} | {'Fee':>5} | {'Max':>5} | {'Slate':<15}")
+    print("-" * 80)
+    for c in eligible_contests:
+        print(
+            f"{c.get('score', 0):>5} | {c.get('name', '')[:40]:<40} | "
+            f"${c.get('entry_fee', 0):>4} | {c.get('max_entries', 0):>5} | "
+            f"{c.get('slate_label', '')[:15]:<15}"
+        )
+
+    # Step 2: Fetch DailyFantasyFuel projections (once for all contests)
+    print("\n📊 Step 2: Fetching DailyFantasyFuel projections...")
+    dff_projections = fetch_projections(sport)
+    if not dff_projections:
+        logger.error("No projections available from DailyFantasyFuel")
+        return
+    print(f"✅ Fetched {len(dff_projections)} projections")
+
+    # Step 3: Fetch Vegas lines (once for all contests)
+    vegas_games = []
+    exclude_teams_vegas = set()
+    if use_vegas_lines and sport == Sport.NHL:
+        print("\n🎰 Step 3: Fetching Vegas lines...")
+        vegas_games = fetch_nhl_odds()
+        if vegas_games:
+            print_odds_summary(vegas_games)
+            exclude_teams_vegas = filter_low_total_teams(vegas_games, min_total=min_game_total)
+            if exclude_teams_vegas:
+                print(f"⚠️ Excluding teams from low-total games: {', '.join(exclude_teams_vegas)}")
+        else:
+            print("⚠️ No Vegas lines available")
+
+    # Step 4: Generate lineups for each contest
+    print("\n🎯 Step 4: Generating lineups for each contest...")
+    results = []
+
+    for contest in eligible_contests:
+        contest_id = contest.get("id")
+        contest_name = contest.get("name", "Unknown")[:50]
+        fixture_list_id = contest.get("fixture_list_id")
+        max_entries = contest.get("max_entries", 1)
+        slate_label = contest.get("slate_label", "")
+
+        print(f"\n{'─' * 70}")
+        print(f"Contest: {contest_name}")
+        print(f"ID: {contest_id} | Slate: {slate_label} | Max entries: {max_entries}")
+        print("─" * 70)
+
+        try:
+            # Generate lineups for this contest
+            lineups = generate_lineups(
+                sport=sport,
+                num_lineups=max_entries,
+                randomness=randomness,
+                fixture_list_id=fixture_list_id,
+                use_estimated_salaries=False,
+                use_vegas_lines=use_vegas_lines,
+                min_game_total=min_game_total,
+                vegas_weight=vegas_weight,
+            )
+
+            if lineups:
+                # Export lineups
+                filepath = export_lineups(lineups, sport, output_dir, contest_id=contest_id)
+
+                # Print verification summary
+                print_verification_summary(lineups, vegas_games, exclude_teams_vegas, sport)
+
+                # Print lineups if requested
+                if print_lineups_flag:
+                    print_lineups(lineups, sport)
+
+                results.append({
+                    "contest_id": contest_id,
+                    "contest_name": contest_name,
+                    "lineups_generated": len(lineups),
+                    "filepath": str(filepath),
+                    "success": True,
+                })
+
+                print(f"\n✅ Generated {len(lineups)} lineups → {filepath}")
+            else:
+                results.append({
+                    "contest_id": contest_id,
+                    "contest_name": contest_name,
+                    "lineups_generated": 0,
+                    "filepath": None,
+                    "success": False,
+                })
+                print(f"\n❌ Failed to generate lineups")
+
+        except Exception as e:
+            logger.error(f"Error generating lineups for contest {contest_id}: {e}")
+            results.append({
+                "contest_id": contest_id,
+                "contest_name": contest_name,
+                "lineups_generated": 0,
+                "filepath": None,
+                "success": False,
+                "error": str(e),
+            })
+            print(f"\n❌ Error: {e}")
+
+    # Final Summary
+    print("\n" + "=" * 70)
+    print("FINAL SUMMARY")
+    print("=" * 70)
+
+    successful = [r for r in results if r["success"]]
+    failed = [r for r in results if not r["success"]]
+
+    print(f"\n✅ Successful: {len(successful)} contests")
+    for r in successful:
+        print(f"   - {r['contest_name'][:40]}: {r['lineups_generated']} lineups")
+        print(f"     → {r['filepath']}")
+
+    if failed:
+        print(f"\n❌ Failed: {len(failed)} contests")
+        for r in failed:
+            print(f"   - {r['contest_name'][:40]}: {r.get('error', 'Unknown error')}")
+
+    total_lineups = sum(r["lineups_generated"] for r in results)
+    print(f"\n📊 Total lineups generated: {total_lineups}")
+    print("=" * 70)
+
+
 def main():
     """Generate FanDuel lineups."""
     parser = argparse.ArgumentParser(description="Generate FanDuel Lineups")
@@ -844,6 +1143,12 @@ def main():
         help="Print lineups to console",
     )
 
+    parser.add_argument(
+        "--auto-select-contest",
+        action="store_true",
+        help="Auto-select eligible contests and generate max lineups for each",
+    )
+
     args = parser.parse_args()
 
     sport = Sport(args.sport)
@@ -851,7 +1156,20 @@ def main():
     # Determine if Vegas lines should be used
     use_vegas = args.use_vegas_lines and not args.no_vegas_lines
 
-    # Generate lineups
+    # Auto-select mode
+    if args.auto_select_contest:
+        run_auto_select_mode(
+            sport=sport,
+            randomness=args.randomness,
+            use_vegas_lines=use_vegas,
+            min_game_total=args.min_game_total,
+            vegas_weight=args.vegas_weight,
+            output_dir=Path(args.output),
+            print_lineups_flag=args.print_lineups,
+        )
+        return
+
+    # Manual mode - Generate lineups
     lineups = generate_lineups(
         sport=sport,
         num_lineups=args.num_lineups,

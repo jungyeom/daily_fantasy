@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 320px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #333;
+    }
+
+    h1 {
+      font-size: 16px;
+      margin: 0 0 16px 0;
+      color: #1a73e8;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo {
+      width: 24px;
+      height: 24px;
+    }
+
+    .status {
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+
+    .status.fresh {
+      background: #e8f5e9;
+      border: 1px solid #4CAF50;
+    }
+
+    .status.stale {
+      background: #fff3e0;
+      border: 1px solid #FF9800;
+    }
+
+    .status.none {
+      background: #ffebee;
+      border: 1px solid #f44336;
+    }
+
+    .status-icon {
+      font-size: 20px;
+      margin-right: 8px;
+    }
+
+    .status-text {
+      font-weight: 500;
+    }
+
+    .token-info {
+      background: #f5f5f5;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .token-label {
+      font-weight: 600;
+      color: #666;
+      margin-bottom: 4px;
+    }
+
+    .token-value {
+      color: #333;
+      margin-bottom: 12px;
+    }
+
+    .token-value:last-child {
+      margin-bottom: 0;
+    }
+
+    .time-info {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 16px;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button.primary {
+      background: #1a73e8;
+      color: white;
+    }
+
+    button.primary:hover {
+      background: #1557b0;
+    }
+
+    button.secondary {
+      background: #e0e0e0;
+      color: #333;
+    }
+
+    button.secondary:hover {
+      background: #d0d0d0;
+    }
+
+    .instructions {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #e0e0e0;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .instructions ol {
+      margin: 8px 0 0 0;
+      padding-left: 20px;
+    }
+
+    .instructions li {
+      margin-bottom: 4px;
+    }
+
+    .copy-feedback {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #333;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .copy-feedback.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <h1>
+    <span class="logo">🏈</span>
+    FanDuel Token Extractor
+  </h1>
+
+  <div id="status" class="status none">
+    <span class="status-icon">⚠️</span>
+    <span class="status-text">No tokens captured</span>
+  </div>
+
+  <div id="token-info" class="token-info" style="display: none;">
+    <div class="token-label">Auth Token:</div>
+    <div id="auth-token" class="token-value">-</div>
+    <div class="token-label">Session Token:</div>
+    <div id="session-token" class="token-value">-</div>
+  </div>
+
+  <div id="time-info" class="time-info" style="display: none;">
+    Captured: <span id="extracted-time">-</span>
+  </div>
+
+  <div class="buttons">
+    <button id="export-btn" class="primary">Export to File</button>
+    <button id="copy-btn" class="secondary">Copy Tokens</button>
+  </div>
+
+  <div class="instructions">
+    <strong>How to use:</strong>
+    <ol>
+      <li>Visit <a href="https://www.fanduel.com" target="_blank">fanduel.com</a> and log in</li>
+      <li>Tokens are automatically captured</li>
+      <li>Click "Export to File" to save tokens</li>
+      <li>Tokens file is saved to your Downloads folder</li>
+    </ol>
+  </div>
+
+  <div id="copy-feedback" class="copy-feedback">Copied to clipboard!</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

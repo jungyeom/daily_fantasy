@@ -1,22 +1,33 @@
 """FanDuel API client for fetching contest and player data.
 
 This module provides read-only API access to FanDuel's DFS platform.
-Authentication tokens must be manually extracted from browser dev tools.
+Authentication tokens can be:
+1. Set via environment variables (FANDUEL_AUTH_TOKEN, FANDUEL_SESSION_TOKEN)
+2. Auto-loaded from browser extension output (~/Downloads/fanduel_tokens.json)
+3. Manually extracted from browser dev tools
 
-How to get auth tokens:
+How to get auth tokens manually:
 1. Log into FanDuel DFS (https://www.fanduel.com/contests)
 2. Open browser dev tools (F12) -> Network tab
 3. Refresh the page and find any request to api.fanduel.com
 4. Copy the 'Authorization' header value (Basic auth token)
 5. Copy the 'X-Auth-Token' header value (Session token)
 
-Note: The X-Auth-Token expires periodically and will need to be refreshed.
+Using the browser extension (recommended):
+1. Install the FanDuel Token Extractor extension from browser_extension/
+2. Visit fanduel.com and log in
+3. Tokens are automatically captured and saved to ~/Downloads/fanduel_tokens.json
+
+Note: Tokens expire periodically and will need to be refreshed.
 """
 
+import json
 import logging
+import os
 import time
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -40,6 +51,48 @@ SPORT_CODES = {
 
 SPORT_CODE_REVERSE = {v: k for k, v in SPORT_CODES.items()}
 
+# Default location for browser extension token output
+EXTENSION_TOKEN_FILE = Path.home() / "Downloads" / "fanduel_tokens.json"
+
+
+def load_tokens_from_extension() -> dict:
+    """Load tokens from browser extension output file.
+
+    The FanDuel Token Extractor browser extension saves tokens to
+    ~/Downloads/fanduel_tokens.json when you visit FanDuel.
+
+    Returns:
+        Dict with 'auth_token' and 'session_token' keys, or empty dict if not found
+    """
+    if not EXTENSION_TOKEN_FILE.exists():
+        logger.debug(f"Extension token file not found: {EXTENSION_TOKEN_FILE}")
+        return {}
+
+    try:
+        with open(EXTENSION_TOKEN_FILE, "r") as f:
+            data = json.load(f)
+
+        tokens = {}
+        if data.get("auth_token"):
+            tokens["auth_token"] = data["auth_token"]
+        if data.get("session_token"):
+            tokens["session_token"] = data["session_token"]
+
+        # Check if tokens are fresh (less than 1 hour old)
+        if data.get("extracted_at"):
+            extracted_at = datetime.fromisoformat(data["extracted_at"].replace("Z", "+00:00"))
+            age = datetime.now(extracted_at.tzinfo) - extracted_at
+            if age.total_seconds() > 3600:
+                logger.warning(f"Extension tokens may be expired (captured {age.total_seconds() / 60:.0f} min ago)")
+            else:
+                logger.info(f"Loaded fresh tokens from extension (captured {age.total_seconds() / 60:.0f} min ago)")
+
+        return tokens
+
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.warning(f"Failed to load extension tokens: {e}")
+        return {}
+
 
 class FanDuelApiClient:
     """Client for FanDuel DFS API (read-only).
@@ -56,6 +109,7 @@ class FanDuelApiClient:
         x_auth_token: Optional[str] = None,
         timeout: int = 30,
         rate_limit_delay: float = 0.5,
+        auto_load_tokens: bool = True,
     ):
         """Initialize FanDuel API client.
 
@@ -66,6 +120,8 @@ class FanDuelApiClient:
                           Extract from browser dev tools. Expires periodically.
             timeout: Request timeout in seconds.
             rate_limit_delay: Delay between API calls in seconds.
+            auto_load_tokens: If True, automatically tries to load tokens from
+                             browser extension output file if not provided.
         """
         self.base_url = FANDUEL_API_BASE
         self.timeout = timeout
@@ -78,6 +134,16 @@ class FanDuelApiClient:
             "Accept": "application/json",
             "Content-Type": "application/json",
         })
+
+        # Try to auto-load session token from extension if not provided
+        # The extension captures X-Auth-Token (session token) which expires frequently
+        # The basic_auth_token (Authorization header) is stable and comes from .env
+        if auto_load_tokens and not x_auth_token:
+            ext_tokens = load_tokens_from_extension()
+            # Extension saves X-Auth-Token as "auth_token" in the JSON
+            if ext_tokens.get("auth_token"):
+                x_auth_token = ext_tokens["auth_token"]
+                logger.info("Loaded session token from browser extension")
 
         # Set auth headers if provided
         if basic_auth_token:

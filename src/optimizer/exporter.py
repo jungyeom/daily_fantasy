@@ -16,7 +16,7 @@ YAHOO_POSITION_ORDER = {
     Sport.NFL: ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DEF"],
     Sport.NBA: ["PG", "SG", "G", "SF", "PF", "F", "C", "UTIL"],
     Sport.MLB: ["P", "P", "C", "1B", "2B", "3B", "SS", "OF", "OF", "OF"],
-    Sport.NHL: ["C", "C", "W", "W", "W", "D", "D", "G", "UTIL"],
+    Sport.NHL: ["G", "G", "C", "C", "W", "W", "W", "D", "D"],
     Sport.PGA: ["G", "G", "G", "G", "G", "G"],
 }
 

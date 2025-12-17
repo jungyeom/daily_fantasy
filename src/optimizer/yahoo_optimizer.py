@@ -45,7 +45,7 @@ YAHOO_ROSTER_CONFIG = {
     },
     Sport.NHL: {
         "salary_cap": 200,
-        "positions": ["C", "C", "W", "W", "W", "D", "D", "G", "UTIL"],
+        "positions": ["G", "G", "C", "C", "W", "W", "W", "D", "D"],
         "max_from_team": None,
     },
 }

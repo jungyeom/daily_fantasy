@@ -35,7 +35,8 @@ class LineupExporter:
         """
         self.sport = sport
         self.config = get_config()
-        self.output_dir = Path(self.config.data_dir) / "lineups"
+        # Use organized folder structure: data/lineups/yahoo/{sport}/
+        self.output_dir = Path(self.config.data_dir) / "lineups" / "yahoo" / sport.value
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def export_for_upload(
@@ -65,7 +66,8 @@ class LineupExporter:
             filepath = Path(output_path)
         else:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"yahoo_upload_{contest_id}_{timestamp}.csv"
+            # Filename format: contest_{id}_{timestamp}.csv
+            filename = f"contest_{contest_id}_{timestamp}.csv"
             filepath = self.output_dir / filename
 
         # Check if this is a single-game lineup (has SUPERSTAR position)

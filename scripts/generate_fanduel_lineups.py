@@ -656,7 +656,13 @@ def generate_lineups(
         return []
 
 
-def export_lineups(lineups: list, sport: Sport, output_dir: Path, use_ids: bool = True) -> Path:
+def export_lineups(
+    lineups: list,
+    sport: Sport,
+    output_dir: Path,
+    use_ids: bool = True,
+    contest_id: int = None,
+) -> Path:
     """Export lineups to FanDuel CSV format.
 
     Args:
@@ -664,15 +670,25 @@ def export_lineups(lineups: list, sport: Sport, output_dir: Path, use_ids: bool 
         sport: Sport for position ordering
         output_dir: Output directory
         use_ids: If True, use FanDuel player IDs; if False, use player names
+        contest_id: Optional contest ID to include in filename
 
     Returns:
         Path to exported CSV
+
+    File naming convention:
+        contest_{contest_id}_{timestamp}.csv
+        Example: contest_124507_20251217_120000.csv
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Use organized folder structure: data/lineups/fanduel/{sport}/
+    sport_dir = output_dir / "fanduel" / sport.value
+    sport_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"fanduel_lineups_{sport.value}_{timestamp}.csv"
-    filepath = output_dir / filename
+    if contest_id:
+        filename = f"contest_{contest_id}_{timestamp}.csv"
+    else:
+        filename = f"lineups_{timestamp}.csv"
+    filepath = sport_dir / filename
 
     positions = FANDUEL_POSITION_ORDER.get(sport, [])
 
@@ -761,6 +777,13 @@ def main():
     )
 
     parser.add_argument(
+        "--contest-id",
+        type=int,
+        default=None,
+        help="Contest ID to include in output filename",
+    )
+
+    parser.add_argument(
         "--num-lineups",
         type=int,
         default=3,
@@ -846,7 +869,7 @@ def main():
 
     # Export
     output_dir = Path(args.output)
-    filepath = export_lineups(lineups, sport, output_dir)
+    filepath = export_lineups(lineups, sport, output_dir, contest_id=args.contest_id)
 
     # Print if requested
     if args.print_lineups:
